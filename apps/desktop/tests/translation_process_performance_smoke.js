@@ -73,8 +73,8 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
     const page = nativeMode ? session.page : await session.browser.newPage({ viewport: { width: 1400, height: 940 }, reducedMotion: 'reduce' });
     await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' });
     page.setDefaultTimeout(30000);
-    const artifactDirectory = process.env.MY_SCHOLAR_PROCESS_ARTIFACT_DIR || os.tmpdir();
-    fs.mkdirSync(artifactDirectory, { recursive: true });
+    const artifactDirectory = process.env.MY_SCHOLAR_PROCESS_ARTIFACT_DIR || (nativeMode ? os.tmpdir() : null);
+    if (artifactDirectory) fs.mkdirSync(artifactDirectory, { recursive: true });
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.__processCopiedText = text; } } });
     });
@@ -400,22 +400,31 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
               range.setStart(text, index); range.setEnd(text, index + 1);
               const rect = range.getBoundingClientRect();
               if (rect.width <= .5 || rect.height <= .5 || rect.top < 8 || rect.bottom > view.innerHeight - 8) continue;
-              const x = rect.left + rect.width / 2; const y = rect.top + rect.height / 2;
-              const hit = doc.elementFromPoint(x, y);
-              if (!hit || Boolean(hit.closest('.my-scholar-translation')) !== (targetSurface === 'translation')) continue;
               let row = rows.find((item) => Math.abs(item.top - rect.top) < 2);
               if (!row) { row = { top: rect.top, characters: [] }; rows.push(row); }
-              row.characters.push({ left: rect.left, right: rect.right, y });
+              row.characters.push({ left: rect.left, right: rect.right, y: rect.top + rect.height / 2 });
             }
           }
         }
         rows.sort((a, b) => a.top - b.top);
-        for (const row of rows) row.characters.sort((a, b) => a.left - b.left);
-        const usable = rows.filter((row) => row.characters.length > 12);
         const lastRow = targetSurface === 'paper' ? 2 : 1;
+        const usable = [];
+        for (const row of rows) {
+          const hittable = [];
+          row.characters.sort((a, b) => a.left - b.left);
+          for (const character of row.characters) {
+            const hit = doc.elementFromPoint((character.left + character.right) / 2, character.y);
+            if (!hit || Boolean(hit.closest('.my-scholar-translation')) !== (targetSurface === 'translation')) continue;
+            hittable.push(character);
+            // The farthest endpoint is character 18 and must leave one after it.
+            if (hittable.length === 20) break;
+          }
+          if (hittable.length > 12) usable.push(hittable);
+          if (usable.length > lastRow) break;
+        }
         if (usable.length <= lastRow) throw new Error(`Not enough visible ${targetSurface} rows for a real multiline drag: ${usable.length}`);
-        const first = usable[0].characters[3];
-        const last = usable[lastRow].characters[Math.min(18, usable[lastRow].characters.length - 2)];
+        const first = usable[0][3];
+        const last = usable[lastRow][Math.min(18, usable[lastRow].length - 2)];
         return { start: { x: first.left + .2, y: first.y }, end: { x: last.right - .2, y: last.y }, rowCount: lastRow + 1, width: view.innerWidth, height: view.innerHeight };
       }, surface);
       const box = await page.locator('#html-preview').boundingBox();
@@ -528,10 +537,13 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
         assert.doesNotMatch(snapshot.nativeText, /Physical theories|designing experiments|exploring new science/u, 'Starting in Chinese must exclude the original English sentence.');
         await page.locator('#selection-translation-result').filter({ hasText: '当前选区已是译文' }).waitFor();
       }
-      const screenshot = path.join(artifactDirectory, `guzi-manual-selection-${nativeMode ? 'electron-native' : baseline ? 'baseline' : 'chromium'}-${surface}-${direction}.png`);
-      await interactionPhase(`${surface}-${direction}-screenshot`);
-      await page.screenshot({ path: screenshot });
-      manualSelection.screenshots.push(screenshot);
+      // Screenshots for manual diagnosis can stall frames while the test measures the renderer.
+      if (artifactDirectory) {
+        const screenshot = path.join(artifactDirectory, `guzi-manual-selection-${nativeMode ? 'electron-native' : baseline ? 'baseline' : 'chromium'}-${surface}-${direction}.png`);
+        await interactionPhase(`${surface}-${direction}-screenshot`);
+        await page.screenshot({ path: screenshot });
+        manualSelection.screenshots.push(screenshot);
+      }
       return snapshot;
     }
     await interactionPhase('source-hover');
@@ -582,7 +594,9 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
       return { phases: value.phases, phaseFrameStats: Object.fromEntries(Object.entries(value.phaseDeltas).map(([phase, deltas]) => [phase, { frames: deltas.length, p95FrameMs: [...deltas].sort((a, b) => a - b)[Math.floor(deltas.length * .95)], maxFrameMs: Math.max(...deltas) }])), frames: value.frames, samples: value.samples, checkedSentences: value.checkedSentences, checkedTranslationRows: value.checkedTranslationRows, checkedBlocks: value.checkedBlocks.size, misaligned: value.misaligned, overlaps: value.overlaps, alternationViolations: value.alternationViolations, settledMutations: value.settledMutations, sameSourceNodes: stable.sources.every((node, i) => node === stable.block.querySelectorAll('.reader-source-sentence')[i]), sameLineNodes: stable.lines.every((node, i) => node === stable.block.querySelectorAll('.reader-translation-line')[i]), sourceMarkRetained: stable.mark?.isConnected, maxFrameMs: Math.max(...value.deltas), p95FrameMs: [...value.deltas].sort((a, b) => a - b)[Math.floor(value.deltas.length * .95)], longtasks: value.longtasks, longtaskDetails: value.longtaskDetails, maxLongtaskMs: Math.max(0, ...value.longtasks) };
     });
     await stopTrace();
-    await frame.locator('[data-block-id="process-0"]').screenshot({ path: path.join(artifactDirectory, `guzi-interleaved-sentence-${nativeMode ? 'electron-native' : baseline ? 'baseline' : 'new'}-complex-paragraph.png`) });
+    if (artifactDirectory) {
+      await frame.locator('[data-block-id="process-0"]').screenshot({ path: path.join(artifactDirectory, `guzi-interleaved-sentence-${nativeMode ? 'electron-native' : baseline ? 'baseline' : 'new'}-complex-paragraph.png`) });
+    }
     if (nativeMode) {
       await page.screenshot({ path: path.join(artifactDirectory, 'guzi-interleaved-sentence-electron-full-window.png') });
       console.error(`[guzi-native] READY pending=${inFlight} mainPid=${session.info.mainPid} backendPid=${session.info.backendPid} tempRoot=${session.tempRoot}`);

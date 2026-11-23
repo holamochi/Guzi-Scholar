@@ -48,8 +48,14 @@ async function pressColumnResizeKey(page, resizer, key) {
     // A different render may remove the old handle before this save is applied.
     await page.waitForFunction(({ id, width, previousHandle }) => {
       const handle = document.querySelector(`#library-columns [data-column-resizer="${CSS.escape(id)}"]`);
-      return handle && handle !== previousHandle && handle.getAttribute('aria-valuenow') === String(width);
-    }, { id, width, previousHandle });
+      return handle && handle !== previousHandle && handle.getAttribute('aria-valuenow') === String(width)
+        && Math.abs(handle.closest('[data-column-id]').getBoundingClientRect().width - width) <= 1;
+    }, { id, width, previousHandle }).catch(async (error) => {
+      const current = await resizer.evaluate((handle) => ({
+        aria: handle.getAttribute('aria-valuenow'), rendered: handle.closest('[data-column-id]').getBoundingClientRect().width,
+      }));
+      throw new Error(`${key} 列宽未同步（saved=${width}, rendered=${current.rendered}, aria=${current.aria}）`, { cause: error });
+    });
   } finally {
     await previousHandle.dispose();
   }

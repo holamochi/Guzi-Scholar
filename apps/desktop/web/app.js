@@ -2325,8 +2325,8 @@
       const column = visibleLibraryColumns().find((item) => item.id === handle.dataset.columnResizer);
       const header = handle.closest('[data-column-id]');
       if (!column || !header) return null;
-      const measured = Math.round(header.getBoundingClientRect().width);
-      return [handle, measured || libraryColumnWidth(column) || libraryColumnMinWidth(column)];
+      const width = libraryColumnWidth(column) ?? Math.round(header.getBoundingClientRect().width);
+      return [handle, width || libraryColumnMinWidth(column)];
     });
     measurements.filter(Boolean).forEach(([handle, width]) => handle.setAttribute('aria-valuenow', String(width)));
   }
@@ -9629,21 +9629,32 @@
     container.classList.add('reader-interlinear-container');
     container.style.setProperty('--reader-interlinear-line-height', `${fontSize * sourceLeading}px`);
     const origin = container.getBoundingClientRect();
+    const contentLeft = origin.left + container.clientLeft;
+    const contentTopInset = container.clientTop;
     const rows = [];
     const parts = sources.map((source) => {
       const rects = [...source.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      if (!rects.length) return [];
       const sourceRows = rects.map((rect) => {
         let row = rows.find((candidate) => Math.abs(candidate.y - rect.top) < 2);
         if (!row) { row = { y: rect.top, top: rect.top, bottom: rect.bottom, parts: [] }; rows.push(row); }
         row.bottom = Math.max(row.bottom, rect.bottom);
         return row;
       });
+      const rowCenters = rects.map((rect) => (rect.top + rect.bottom) / 2);
       const units = [];
       const rowFor = (rect) => {
+        if (rowCenters.length === 1) return sourceRows[0];
         const center = (rect.top + rect.bottom) / 2;
-        const closest = rects.reduce((best, candidate, i) => Math.abs((candidate.top + candidate.bottom) / 2 - center) < best.distance
-          ? { index: i, distance: Math.abs((candidate.top + candidate.bottom) / 2 - center) } : best, { index: 0, distance: Infinity });
-        return sourceRows[closest.index];
+        let closest = 0;
+        let distance = Math.abs(rowCenters[0] - center);
+        for (let index = 1; index < rowCenters.length; index += 1) {
+          const next = Math.abs(rowCenters[index] - center);
+          if (next >= distance) continue;
+          closest = index;
+          distance = next;
+        }
+        return sourceRows[closest];
       };
       const add = (rect, node, offset, anchor, anchorOffset = 0) => {
         const row = rowFor(rect);
@@ -9679,23 +9690,25 @@
             return range.getBoundingClientRect();
           };
           for (let start = 0; start < node.length;) {
-            const row = rowFor(at(start));
-            let low = start + 1;
-            let high = node.length;
-            while (low < high) {
-              const middle = Math.floor((low + high) / 2);
-              if (rowFor(at(middle)) === row) low = middle + 1;
-              else high = middle;
+            let end = node.length;
+            if (rowCenters.length > 1) {
+              const row = rowFor(at(start));
+              let low = start + 1;
+              while (low < end) {
+                const middle = Math.floor((low + end) / 2);
+                if (rowFor(at(middle)) === row) low = middle + 1;
+                else end = middle;
+              }
             }
-            const value = node.data.slice(start, low);
+            const value = node.data.slice(start, end);
             const visibleStart = start + value.search(/\S/u);
-            const visibleEnd = low - value.length + value.trimEnd().length;
+            const visibleEnd = end - value.length + value.trimEnd().length;
             if (visibleStart >= start && visibleEnd > visibleStart) {
               range.setStart(node, visibleStart); range.setEnd(node, visibleEnd);
               const rect = range.getBoundingClientRect();
               add(rect, node, visibleEnd, node, visibleStart);
             }
-            start = low;
+            start = end;
           }
         } else if (node.nodeType === Node.ELEMENT_NODE && !node.matches('.annotation-note-trigger, .paragraph-translate-trigger')) {
           if (node.matches(atomicSelector)) {
@@ -9782,7 +9795,7 @@
           } else [...node.childNodes].forEach(visit);
         }
       };
-      if (firstBox) [...run.childNodes].forEach(visit);
+      if (boxes.length > 1) [...run.childNodes].forEach(visit);
       if (boundary) {
         const remainder = measurement;
         remainder.selectNodeContents(run);
@@ -9795,7 +9808,7 @@
       const contents = measurement;
       contents.selectNodeContents(run);
       const occupied = [...contents.getClientRects()].filter((rect) => rect.width && rect.height);
-      const occupiedRight = Math.max(left, ...occupied.map((rect) => rect.right - origin.left - container.clientLeft));
+      const occupiedRight = Math.max(left, ...occupied.map((rect) => rect.right - contentLeft));
       const height = Math.max(box.height, ...occupied.map((rect) => rect.bottom - box.top));
       row.lines.push({ line, height });
       lines.push(line);
@@ -9809,9 +9822,9 @@
       let cursor = 0;
       for (const stream of streams) {
         if (!stream.first || stream.start > index || !stream.remaining.hasChildNodes()) continue;
-        const left = stream.start === index ? Math.max(0, stream.first.left - origin.left - container.clientLeft) : cursor;
-        const next = starting.find((candidate) => candidate.index > stream.index && candidate.first.left >= origin.left + container.clientLeft + left - .5);
-        const right = next ? next.first.left - origin.left - container.clientLeft - gap : width;
+        const left = stream.start === index ? Math.max(0, stream.first.left - contentLeft) : cursor;
+        const next = starting.find((candidate) => candidate.index > stream.index && candidate.first.left >= contentLeft + left - .5);
+        const right = next ? next.first.left - contentLeft - gap : width;
         if (right - left < 1) continue;
         cursor = takeLine(stream, left, right, row);
       }
@@ -9825,8 +9838,11 @@
       // Keep the upper leading; the translated row replaces the lower leading.
       const leading = Math.max(0, (fontSize * sourceLeading - sourceHeight) / 2);
       spacer.style.height = `${sourceHeight + leading + depth + gap * 2}px`;
-      row.parts.at(-1).end.insertNode(spacer);
       row.spacer = spacer;
+    }
+    // The translated lines have fixed widths. Insert source spacers together after measuring them.
+    for (const row of rows) {
+      if (row.spacer) row.parts.at(-1).end.insertNode(row.spacer);
     }
     const finalOrigin = container.getBoundingClientRect();
     let tailTop = 0;
@@ -9834,7 +9850,7 @@
       if (row.spacer) row.shift = row.anchor.target.getBoundingClientRect().top - row.anchor.top;
     }
     for (const row of rows) {
-      const top = row.tail ? tailTop : row.bottom - finalOrigin.top + (row.shift || 0) + gap - container.clientTop;
+      const top = row.tail ? tailTop : row.bottom - finalOrigin.top + (row.shift || 0) + gap - contentTopInset;
       for (const part of row.lines) part.line.style.top = `${top}px`;
       tailTop = Math.max(tailTop, top + Math.max(0, ...row.lines.map((part) => part.height)) + gap);
     }
