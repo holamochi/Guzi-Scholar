@@ -178,7 +178,21 @@ ${Object.entries(texts).map(([id, text]) => `<p data-block-id="${id}" data-page=
     await frame.locator('.annotation-note-trigger[data-annotation-id="second-note"]').click();
     await popup().locator('[data-action="edit"]').click();
     const editor = frame.locator('.annotation-note-editor');
+    await editor.fill('');
+    await page.keyboard.insertText('>');
+    await page.keyboard.press('Space');
+    assert.equal(await editor.locator('blockquote').count(), 1, 'Markdown input applies in the reader iframe');
+    await page.keyboard.press('ControlOrMeta+z');
+    assert.equal((await editor.textContent()).trim(), '>', 'Inline notes keep the native undo transaction');
+    const composingEscape = await editor.evaluate((node) => node.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape', isComposing: true, bubbles: true, cancelable: true,
+    })));
+    assert(composingEscape && await editor.isVisible(), 'Confirming or cancelling composition cannot close the editor');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await editor.fill('未保存的编辑内容');
+    const inlineCaret = frame.locator('.writing-motion-caret:not([hidden])');
+    await inlineCaret.waitFor();
+    assert(await editor.evaluate((node) => node.classList.contains('writing-motion-caret-active')));
     const beforeEditHover = sentences().length;
     await hover(mark('first-note'));
     await page.waitForTimeout(600);
@@ -188,6 +202,8 @@ ${Object.entries(texts).map(([id, text]) => `<p data-block-id="${id}" data-page=
     assert.equal(await tooltip().count(), 0, 'Translation cannot cover a pinned editor');
     assert.equal(sentences().length, beforeEditHover);
     await popup().locator('[data-action="close"]').click();
+    await inlineCaret.waitFor({ state: 'hidden' });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await idle();
 
     await page.bringToFront();

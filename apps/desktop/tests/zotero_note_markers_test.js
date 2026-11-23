@@ -28,7 +28,7 @@ const context = vm.createContext({ Node, articleNoteServerRevisions: new Map([['
   escapeHTML: (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char])),
 });
 vm.runInContext([
-  section('function escapeAnnotationMarkdownText(', 'function insertPlainTextAtSelection('),
+  section('function escapeAnnotationMarkdownText(', 'const composingNoteEditors'),
   section('function renderMarkdown(', 'function restoreArticleNoteDrafts('),
   section('function articleNotesSnapshot(', 'function setArticleNotesStatus('),
   'this.render = renderMarkdown; this.markdown = annotationEditorMarkdown; this.snapshot = articleNotesSnapshot;',

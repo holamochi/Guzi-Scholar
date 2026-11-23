@@ -466,7 +466,11 @@
         syncControls();
       }
     }
-    function searchKey(event) { if (event.key === 'Enter') { event.preventDefault(); search(); } }
+    function searchKey(event) {
+      if (event.isComposing || event.keyCode === 229 || event.key !== 'Enter') return;
+      event.preventDefault();
+      search();
+    }
     const listeners = [
       [$('#zotero-connect'), 'click', connect], [$('#zotero-close'), 'click', close],
       [$('#zotero-library'), 'change', changeLibrary], [$('#zotero-collection'), 'change', changeCollection],
