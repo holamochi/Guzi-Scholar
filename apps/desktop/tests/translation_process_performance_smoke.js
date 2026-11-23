@@ -237,14 +237,17 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
       }).observe({ type: 'longtask', buffered: false });
       // Reuse a live Range so sampling does not amplify every subsequent DOM mutation.
       const measurement = doc.createRange();
-      const rectangles = (root) => {
+      const rectangles = (root, textRects) => {
         const rects = [];
         const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         let text;
         while ((text = walker.nextNode())) {
           if (text.parentElement.closest('button,.annotation-note-trigger,.translation-source-label')) continue;
-          const range = measurement; range.selectNodeContents(text);
-          rects.push(...[...range.getClientRects()].filter((rect) => rect.width > .5 && rect.height > .5));
+          const cached = textRects?.get(text);
+          if (!cached) measurement.selectNodeContents(text);
+          for (const rect of cached ?? measurement.getClientRects()) {
+            if (rect.width > .5 && rect.height > .5) rects.push(rect);
+          }
         }
         rects.push(...[...root.querySelectorAll('math,img')].map((node) => node.getBoundingClientRect()).filter((rect) => rect.width > .5 && rect.height > .5));
         return rects;
@@ -285,15 +288,30 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
       }
       function inspect() {
         if (metrics.stopped) return;
-        const blocks = [...content.querySelectorAll('.reader-sentence-pairs')];
-        const newlyTranslated = blocks.filter((block) => !metrics.checkedBlocks.has(block.dataset.blockId));
-        const visible = blocks.filter((block) => { const rect = block.getBoundingClientRect(); return rect.bottom > 0 && rect.top < view.innerHeight; });
-        for (const block of new Set([...newlyTranslated, ...visible])) {
+        const blocks = content.querySelectorAll('.reader-sentence-pairs');
+        const candidates = new Set();
+        for (const block of blocks) {
+          if (!metrics.checkedBlocks.has(block.dataset.blockId)) candidates.add(block);
+        }
+        // The fixture stacks its paragraphs in document order in a single column.
+        let firstVisible = 0;
+        let end = blocks.length;
+        while (firstVisible < end) {
+          const middle = Math.floor((firstVisible + end) / 2);
+          if (blocks[middle].getBoundingClientRect().bottom <= 0) firstVisible = middle + 1;
+          else end = middle;
+        }
+        for (let index = firstVisible; index < blocks.length; index += 1) {
+          const block = blocks[index];
+          if (block.getBoundingClientRect().top >= view.innerHeight) break;
+          candidates.add(block);
+        }
+        for (const block of candidates) {
           if (!block.querySelector('.reader-translation-line')) continue;
           metrics.checkedBlocks.add(block.dataset.blockId); metrics.samples += 1;
           const sources = [...block.querySelectorAll(':scope > .reader-source-sentence')];
           const translations = [...block.querySelectorAll(':scope > .reader-sentence-translation')];
-          const sourceRects = sources.flatMap(rectangles);
+          const sourceRects = sources.flatMap((source) => rectangles(source));
           const sourceRows = [];
           for (const rect of sources.flatMap((source) => [...source.getClientRects()]).sort((a, b) => a.top - b.top)) {
             if (rect.width > .5 && rect.height > .5 && !sourceRows.some((top) => Math.abs(top - rect.top) < 2)) sourceRows.push(rect.top);
@@ -305,18 +323,21 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
             metrics.checkedSentences += 1;
             if ((!source || !translated || Math.abs(source.left - translated.left) > 1) && metrics.misaligned.length < 20) metrics.misaligned.push({ block: block.dataset.blockId, sentence: index, source: source?.left, translation: translated?.left });
             const walker = doc.createTreeWalker(translation.querySelector('.translation-text'), NodeFilter.SHOW_TEXT);
+            const textRects = new Map();
             let text;
             while ((text = walker.nextNode())) {
               if (!text.data.trim() || text.parentElement.closest('math,.katex,.math-source-visual,sup,sub,button')) continue;
-              const range = measurement; range.selectNodeContents(text);
-              for (const rect of range.getClientRects()) {
+              measurement.selectNodeContents(text);
+              const glyphs = measurement.getClientRects();
+              textRects.set(text, glyphs);
+              for (const rect of glyphs) {
                 if (rect.width <= .5 || rect.height <= .5) continue;
                 const row = sourceRows.findLastIndex((top) => top < rect.top);
                 if (row < 0) continue;
                 if (!translationRows[row].some((top) => Math.abs(top - rect.top) < 2)) translationRows[row].push(rect.top);
               }
             }
-            const rects = rectangles(translation);
+            const rects = rectangles(translation, textRects);
             if (rects.some((rect) => sourceRects.some((sourceRect) => overlaps(rect, sourceRect)) || earlier.some((other) => overlaps(rect, other))) && metrics.overlaps.length < 20) metrics.overlaps.push({ block: block.dataset.blockId, sentence: index, frame: metrics.frames });
             earlier.push(...rects);
           });
@@ -368,6 +389,7 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
         const view = doc.defaultView;
         const roots = targetSurface === 'paper' ? [...block.querySelectorAll(':scope > .reader-source-sentence')] : [...block.querySelectorAll(':scope > .reader-sentence-translation .translation-text')];
         const rows = [];
+        const range = doc.createRange();
         for (const root of roots) {
           const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
           let text;
@@ -375,7 +397,7 @@ const note = { id: 'process-source-note', block_id: 'process-0', surface: 'paper
             if (text.parentElement.closest('math,.katex,.math-source-visual,sup,sub,button,.reader-interlinear-gap')) continue;
             for (let index = 0; index < text.length; index += 1) {
               if (!text.data[index].trim()) continue;
-              const range = doc.createRange(); range.setStart(text, index); range.setEnd(text, index + 1);
+              range.setStart(text, index); range.setEnd(text, index + 1);
               const rect = range.getBoundingClientRect();
               if (rect.width <= .5 || rect.height <= .5 || rect.top < 8 || rect.bottom > view.innerHeight - 8) continue;
               const x = rect.left + rect.width / 2; const y = rect.top + rect.height / 2;
