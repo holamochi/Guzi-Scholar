@@ -32,12 +32,24 @@ async function waitForLibrary(page) {
   await page.locator('#recent-list .library-row').first().waitFor();
 }
 
-async function pressColumnResizeKey(resizer, key) {
+async function pressColumnResizeKey(page, resizer, key) {
+  const id = await resizer.getAttribute('data-column-resizer');
   const previousHandle = await resizer.elementHandle();
   try {
-    await resizer.press(key);
-    // The save response rebuilds the header. A GET can see the new width before that render.
-    await previousHandle.waitForElementState('hidden');
+    const [response] = await Promise.all([
+      page.waitForResponse((candidate) => candidate.request().method() === 'PATCH'
+        && new URL(candidate.url()).pathname === '/api/library/display'),
+      resizer.press(key),
+    ]);
+    if (!response.ok()) throw new Error(`${key} 列宽保存失败（HTTP ${response.status()}）`);
+    const { display } = await response.json();
+    const width = Number(display.columns.find((column) => column.id === id)?.width);
+    if (!Number.isFinite(width)) throw new Error(`${key} 列宽保存响应缺少 ${id} 的宽度`);
+    // A different render may remove the old handle before this save is applied.
+    await page.waitForFunction(({ id, width, previousHandle }) => {
+      const handle = document.querySelector(`#library-columns [data-column-resizer="${CSS.escape(id)}"]`);
+      return handle && handle !== previousHandle && handle.getAttribute('aria-valuenow') === String(width);
+    }, { id, width, previousHandle });
   } finally {
     await previousHandle.dispose();
   }
@@ -494,14 +506,14 @@ async function assertTextCaretGlide(page, fieldSelector, overlaySelector) {
     const initialAriaWidth = Number(await nameResizer.getAttribute('aria-valuenow'));
     if (!Number.isFinite(initialAriaWidth) || initialAriaWidth <= 0) throw new Error(`名称列控制柄 aria-valuenow 无效（${initialAriaWidth}）`);
 
-    await pressColumnResizeKey(nameResizer, 'ArrowRight');
+    await pressColumnResizeKey(page, nameResizer, 'ArrowRight');
     const afterRightPayload = await api('/api/library');
     const afterRightWidth = Number((afterRightPayload.library?.display?.columns || []).find((column) => column.id === 'name')?.width);
     nameResizer = page.locator('#library-columns [data-column-resizer="name"]').first();
     const afterRightAriaWidth = Number(await nameResizer.getAttribute('aria-valuenow'));
     if (!Number.isFinite(afterRightWidth) || afterRightWidth <= initialAriaWidth || afterRightAriaWidth !== afterRightWidth) throw new Error(`ArrowRight 列宽或 aria-valuenow 未正确更新（before=${initialAriaWidth}, stored=${afterRightWidth}, aria=${afterRightAriaWidth}）`);
 
-    await pressColumnResizeKey(nameResizer, 'ArrowLeft');
+    await pressColumnResizeKey(page, nameResizer, 'ArrowLeft');
     const afterLeftPayload = await api('/api/library');
     const afterLeftWidth = Number((afterLeftPayload.library?.display?.columns || []).find((column) => column.id === 'name')?.width);
     nameResizer = page.locator('#library-columns [data-column-resizer="name"]').first();
