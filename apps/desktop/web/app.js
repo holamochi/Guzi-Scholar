@@ -15,6 +15,7 @@
     pausePersistentStateWrites,
     resumePersistentStateWrites,
   } = window.MyScholarCore;
+  const writingMotion = window.MyScholarWritingMotion;
   const browserDemo = window.MyScholarDemo?.enabled ? window.MyScholarDemo : null;
   let demoResetting = false;
   if (browserDemo) window.addEventListener('my-scholar-demo-invalidated', showBrowserDemoInvalidation);
@@ -570,6 +571,7 @@
     if (viewId !== 'reader-view') {
       closeImageContextMenu();
       closeImageLightbox({ restoreFocus: false });
+      closeNotePopovers();
     }
     if (viewId !== 'reader-view' && state.activeJob) {
       flushPendingArticleNotes(state.activeJob.job_id);
@@ -937,7 +939,10 @@
     const toggle = $('#assistant-toggle');
     if (!sidebar || !toggle) return;
     const next = Boolean(open);
-    if (!next) closeChatSessionMenu();
+    if (!next) {
+      closeChatSessionMenu();
+      closeNotePopovers();
+    }
     sidebar.classList.toggle('is-open', next);
     sidebar.setAttribute('aria-hidden', String(!next));
     toggle.setAttribute('aria-expanded', String(next));
@@ -2225,10 +2230,11 @@
     if (event.target.closest('[data-cell-save]')) await commitLibraryCellValue(libraryCellEditorValue(popover, property));
   });
   document.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape' && closeLibraryCellEditor({ restoreFocus: true })) event.preventDefault();
   });
   $('#cell-editor-popover')?.addEventListener('keydown', async (event) => {
-    if (event.key !== 'Enter' || !event.target.closest('[data-cell-input]')) return;
+    if (event.isComposing || event.keyCode === 229 || event.key !== 'Enter' || !event.target.closest('[data-cell-input]')) return;
     event.preventDefault();
     const popover = $('#cell-editor-popover');
     const property = propertyById(libraryCellEditor.propertyId);
@@ -4037,7 +4043,7 @@
   }
 
   function handleReaderSearchShortcut(event) {
-    if (event.defaultPrevented || event.isComposing || !$('#reader-view')?.classList.contains('active-view')) return false;
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || !$('#reader-view')?.classList.contains('active-view')) return false;
     if (readerSearchShortcut(event) && !isEditableAppSurface(event.target)) {
       event.preventDefault();
       event.stopPropagation();
@@ -4059,6 +4065,7 @@
     scrollReaderSearchCurrent('auto');
   });
   $('#reader-search-input')?.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) { event.stopPropagation(); return; }
     if (event.key === 'Escape') {
       event.preventDefault();
       closeReaderSearch();
@@ -7077,6 +7084,12 @@
           border:1px solid var(--line,#e7ded2);
           border-radius:8px;
           background:var(--paper,var(--reader-ui-paper));
+          transition:border-color 150ms ease,box-shadow 150ms ease;
+          animation:annotation-editor-in 150ms cubic-bezier(.22,1,.36,1);
+        }
+        @keyframes annotation-editor-in {
+          from { opacity:.65; transform:translateY(3px); }
+          to { opacity:1; transform:translateY(0); }
         }
         .annotation-note-editor-shell:focus-within {
           border-color:var(--annotation-color);
@@ -7100,6 +7113,7 @@
           font:inherit;
           font-size:var(--reader-caption-font-size,12px);
           cursor:pointer;
+          transition:background-color 150ms ease;
         }
         .annotation-note-formatbar button:hover,.annotation-note-formatbar button:focus-visible {
           background:color-mix(in srgb,var(--annotation-color) 16%,var(--paper,var(--reader-ui-paper)));
@@ -7113,6 +7127,7 @@
           border-radius:0;
           caret-color:var(--annotation-color);
         }
+        .annotation-note-editor ::selection { background-color:color-mix(in srgb,var(--annotation-color,var(--reader-ui-ink)) 24%,transparent); }
         .annotation-note-popover-actions { display:flex; flex-wrap:wrap; gap:5px; margin-top:10px; }
         .annotation-note-popover-actions button {
           padding:4px 7px;
@@ -7288,7 +7303,9 @@
         @media (prefers-reduced-motion:reduce) {
           .reader-content .my-scholar-media-resizable,
           .reader-content .my-scholar-media-resize-handle,
-          .annotation-note-popover { transition:none; animation:none; }
+          .annotation-note-popover,
+          .annotation-note-editor-shell,
+          .annotation-note-formatbar button { transition:none; animation:none; }
         }
         :root:not([data-translation-display="original"]) .reader-content :is(
           h1.paper-title[data-block-id],
@@ -7912,6 +7929,7 @@
     notePopoverHover.anchor = null;
     const popover = doc?.querySelector('.annotation-note-popover');
     if (!popover) return;
+    if (popover.querySelector('.annotation-note-editor')) writingMotion?.reset(doc);
     const trigger = annotationAnchor(doc, popover.dataset.annotationId);
     if (trigger?.classList.contains('my-scholar-ai-suggestion')) trigger.setAttribute('aria-expanded', 'false');
     const remove = () => popover.remove();
@@ -8708,27 +8726,152 @@
       .trim();
   }
 
-  function insertPlainTextAtSelection(editor, value) {
+  const composingNoteEditors = new WeakSet();
+
+  function isComposingNoteInput(event) {
+    return event.isComposing || event.keyCode === 229 || composingNoteEditors.has(event.currentTarget);
+  }
+
+  function noteEditRange(editor) {
+    const selection = editor?.ownerDocument.getSelection();
+    if (editor?.contentEditable !== 'true' || !selection?.rangeCount) return null;
+    const range = selection.getRangeAt(0);
+    return editor.contains(range.commonAncestorContainer) ? range : null;
+  }
+
+  function notePlainParagraph(editor, range) {
+    const start = range.startContainer;
+    const block = start.nodeType === Node.TEXT_NODE ? start.parentElement : start;
+    if (block !== editor && (block.nodeType !== Node.ELEMENT_NODE || block.parentElement !== editor || !block.matches('p,div'))) return null;
+    // A trailing BR can be the browser's placeholder for an empty last line.
+    return [...block.childNodes].every((child) => child.nodeType === Node.TEXT_NODE
+      || (child.nodeName === 'BR' && child === block.lastChild)) ? block : null;
+  }
+
+  function noteEditorIsEmpty(editor) {
+    return !editor.textContent.trim() && !editor.querySelector('img,hr,h1,h2,h3,ul,ol,blockquote,pre,details,[data-tex]');
+  }
+
+  function replaceNoteMarkup(editor, replacement, html, checkpoint) {
     const doc = editor.ownerDocument;
     const selection = doc.getSelection();
-    if (!selection?.rangeCount) return;
-    const range = selection.getRangeAt(0);
-    const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement;
-    if (anchor !== editor && !editor.contains(anchor)) return;
+    const previous = selection.getRangeAt(0).cloneRange();
+    checkpoint?.();
+    selection.removeAllRanges();
+    selection.addRange(replacement);
+    // insertHTML keeps the edit on the browser's undo stack in inline notes.
+    if (doc.execCommand('insertHTML', false, html)) {
+      checkpoint?.();
+      return true;
+    }
+    selection.removeAllRanges();
+    selection.addRange(previous);
+    return false;
+  }
+
+  const noteInlineInputTags = { '**': 'strong', __: 'strong', '*': 'em', _: 'em', '~~': 'del', '`': 'code' };
+
+  function applyNoteMarkdownInput(event, checkpoint) {
+    if (request.closeGate || isComposingNoteInput(event)) return;
+    const space = event.type === 'input' && event.inputType === 'insertText' && event.data === ' ';
+    const enter = event.type === 'beforeinput' && event.inputType === 'insertParagraph' && event.cancelable;
+    if (!space && !enter) return;
+    const editor = event.currentTarget;
+    const range = noteEditRange(editor);
+    if (!range?.collapsed) return;
+    const doc = editor.ownerDocument;
+    const block = notePlainParagraph(editor, range);
+    const replacement = doc.createRange();
+    let html = '';
+    if (block) {
+      replacement.selectNodeContents(block);
+      replacement.setEnd(range.startContainer, range.startOffset);
+      const text = replacement.toString();
+      if (text === block.textContent) {
+        const heading = space && text.match(/^(#{1,3})[ \u00a0]$/u);
+        if (heading) {
+          const tag = `h${heading[1].length}`;
+          html = `<${tag}><br></${tag}>`;
+        } else if (space && /^[-+*][ \u00a0]$/u.test(text)) {
+          html = '<ul><li><br></li></ul>';
+        } else if (space && /^1[.)][ \u00a0]$/u.test(text)) {
+          html = '<ol><li><br></li></ol>';
+        } else if (space && /^>[ \u00a0]$/u.test(text)) {
+          html = '<blockquote><br></blockquote>';
+        } else if (enter && /^---$/u.test(text)) {
+          html = '<hr><p><br></p>';
+        }
+        if (html) {
+          replacement.selectNodeContents(block);
+        }
+      }
+    }
+    const node = range.startContainer;
+    if (!html && space && node.nodeType === Node.TEXT_NODE
+      && !node.parentElement.closest('pre,code,a,[contenteditable="false"]')) {
+      const before = node.nodeValue.slice(0, range.startOffset);
+      const match = /[*_~`][ \u00a0]$/u.test(before)
+        && before.match(/(?<![\\*_~`])(\*\*|__|~~|`|\*|_)([^\n]+?)\1[ \u00a0]$/u);
+      if (match) {
+        const [, marker, content] = match;
+        const wordBoundary = !/[\p{L}\p{N}]/u.test(before[match.index - 1] || '');
+        if ((wordBoundary || ['**', '~~', '`'].includes(marker)) && content.trim() && content === content.trim() && !content.includes(marker[0])) {
+          const tag = noteInlineInputTags[marker];
+          html = `<${tag}>${escapeHTML(content)}</${tag}>&nbsp;`;
+          replacement.setStart(node, match.index);
+          replacement.setEnd(node, range.startOffset);
+        }
+      }
+    }
+    if (html && replaceNoteMarkup(editor, replacement, html, checkpoint) && enter) event.preventDefault();
+  }
+
+  function pasteNoteText(editor, clipboard, jobId, checkpoint) {
+    const value = (clipboard?.getData('text/markdown') || clipboard?.getData('text/plain') || '').replace(/\r\n?/g, '\n');
+    const active = noteEditRange(editor);
+    if (!value || !active) return;
+    const doc = editor.ownerDocument;
+    const selection = doc.getSelection();
+    const block = active.collapsed ? notePlainParagraph(editor, active) : null;
+    if (block && !block.textContent.trim() && /^(?:#{1,3} +\S|[-+*] +\S|\d+[.)] +\S|> ?\S|```[\w+#.-]*$)/mu.test(value)) {
+      const html = renderMarkdown(value, jobId);
+      const before = block === editor ? null : block.previousSibling;
+      const replacement = doc.createRange();
+      replacement.selectNodeContents(block);
+      if (html && replaceNoteMarkup(editor, replacement, html, checkpoint)) {
+        const pastedRange = noteEditRange(editor)?.cloneRange();
+        if (pastedRange) {
+          if (before?.parentNode === editor) pastedRange.setStartAfter(before);
+          else pastedRange.setStart(editor, 0);
+          writingMotion?.revealPaste(editor, pastedRange);
+        }
+        hydrateFrameMath(doc);
+        return;
+      }
+    }
+    checkpoint?.();
+    const range = active.cloneRange();
     range.deleteContents();
     const fragment = doc.createDocumentFragment();
-    let lastNode = null;
-    String(value || '').split('\n').forEach((line, index) => {
-      if (index) { lastNode = doc.createElement('br'); fragment.appendChild(lastNode); }
-      if (line) { lastNode = doc.createTextNode(line); fragment.appendChild(lastNode); }
+    value.split('\n').forEach((line, index) => {
+      if (index) fragment.append(doc.createElement('br'));
+      if (line) fragment.append(doc.createTextNode(line));
     });
-    if (!lastNode) lastNode = doc.createTextNode('');
-    if (!lastNode.parentNode) fragment.appendChild(lastNode);
+    const first = fragment.firstChild;
+    const last = fragment.lastChild;
     range.insertNode(fragment);
-    range.setStartAfter(lastNode);
+    const pastedRange = doc.createRange();
+    if (first.nodeType === Node.TEXT_NODE) pastedRange.setStart(first, 0);
+    else pastedRange.setStartBefore(first);
+    if (last.nodeType === Node.TEXT_NODE) pastedRange.setEnd(last, last.length);
+    else pastedRange.setEndAfter(last);
+    range.setStartAfter(last);
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
+    writingMotion?.revealPaste(editor, pastedRange);
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    checkpoint?.();
   }
 
   function beginAnnotationEdit(annotation, trigger, popover) {
@@ -8771,19 +8914,18 @@
     editor.setAttribute('spellcheck', 'true');
     editor.dataset.placeholder = '记录你的想法…';
     editor.innerHTML = renderMarkdown(annotation.note || '');
-    const updateEmptyState = () => editor.classList.toggle('is-empty', !editor.textContent.trim() && !editor.querySelector('img'));
+    const updateEmptyState = () => editor.classList.toggle('is-empty', noteEditorIsEmpty(editor));
     updateEmptyState();
     shell.append(toolbar, editor);
     body.replaceChildren(shell);
+    writingMotion?.observe(doc);
     editor.addEventListener('input', updateEmptyState);
+    editor.addEventListener('input', (event) => applyNoteMarkdownInput(event));
+    editor.addEventListener('beforeinput', (event) => applyNoteMarkdownInput(event));
+    editor.addEventListener('compositionstart', () => composingNoteEditors.add(editor));
+    editor.addEventListener('compositionend', () => composingNoteEditors.delete(editor));
 
-    const selectionRange = () => {
-      const selection = doc.getSelection();
-      if (!selection?.rangeCount) return null;
-      const range = selection.getRangeAt(0);
-      const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement;
-      return anchor === editor || editor.contains(anchor) ? range.cloneRange() : null;
-    };
+    const selectionRange = () => noteEditRange(editor)?.cloneRange() || null;
     let savedRange = null;
     const restoreRange = (range) => {
       const selection = doc.getSelection();
@@ -8819,6 +8961,7 @@
         const selection = doc.getSelection();
         selection.removeAllRanges();
         selection.addRange(nextRange);
+        writingMotion?.revealImage(editor, image);
         updateEmptyState();
         showToast('图片已插入笔记。');
       } catch (error) {
@@ -8864,8 +9007,7 @@
         return;
       }
       event.preventDefault();
-      insertPlainTextAtSelection(editor, event.clipboardData?.getData('text/plain') || '');
-      updateEmptyState();
+      pasteNoteText(editor, event.clipboardData, jobId);
     });
     actions.innerHTML = '<button type="button" data-action="save-note">保存笔记</button><button type="button" data-action="cancel-edit">取消</button><button type="button" data-action="delete">删除</button><button type="button" data-action="close">关闭</button>';
     const save = () => editAnnotationNote(annotation, annotationEditorMarkdown(editor), trigger);
@@ -8874,6 +9016,7 @@
     actions.querySelector('[data-action="delete"]').addEventListener('click', () => deleteAnnotation(annotation));
     actions.querySelector('[data-action="close"]').addEventListener('click', () => closeInlineAnnotation(doc));
     editor.addEventListener('keydown', (event) => {
+      if (isComposingNoteInput(event)) { event.stopPropagation(); return; }
       const modifier = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
       if (modifier && key === 'a') {
@@ -10605,6 +10748,7 @@
     const target = document.getElementById(panelId);
     if (!target?.classList.contains('sidebar-panel')) return;
     if (panelId !== 'chat-panel') closeChatSessionMenu();
+    if (panelId !== 'notes-panel') closeNotePopovers();
     const current = $('.sidebar-panel.active-panel:not([hidden])');
     $$('.sidebar-tab').forEach((tab) => {
       const active = tab.dataset.panel === panelId;
@@ -12412,12 +12556,29 @@
     prefix.selectNodeContents(editor);
     prefix.setEnd(range.startContainer, range.startOffset);
     const start = prefix.toString().length;
-    return { start, end: start + range.toString().length };
+    const offsets = { start, end: start + range.toString().length };
+    const element = range.startContainer;
+    if (range.collapsed && element.nodeType === Node.ELEMENT_NODE && !element.textContent) {
+      const path = [];
+      for (let node = element; node !== editor; node = node.parentElement) {
+        path.unshift([...node.parentElement.children].indexOf(node));
+      }
+      offsets.emptyElement = { path, offset: range.startOffset };
+    }
+    return offsets;
   }
 
   function restoreNoteCaret(offsets) {
     const editor = noteEditorElement();
     if (!editor || !offsets) return;
+    if (offsets.emptyElement) {
+      const { path, offset } = offsets.emptyElement;
+      const element = path.reduce((parent, index) => parent?.children[index], editor);
+      if (element && !element.textContent) {
+        window.getSelection().collapse(element, Math.min(offset, element.childNodes.length));
+        return;
+      }
+    }
     const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
     let seen = 0;
     let start = null;
@@ -12472,6 +12633,7 @@
 
   function stepNoteHistory(delta) {
     const editor = noteEditorElement();
+    if (noteHistory.timer) commitNoteHistory({ immediate: true });
     const next = noteHistory.index + delta;
     if (!editor || next < 0 || next >= noteHistory.entries.length) return false;
     window.clearTimeout(noteHistory.timer);
@@ -12482,7 +12644,7 @@
       const entry = noteHistory.entries[next];
       editor.innerHTML = entry.html;
       hydrateFrameMath(document);
-      editor.focus();
+      editor.focus({ preventScroll: true });
       restoreNoteCaret(entry.caret);
       updateArticleNotesEmptyState(editor);
     } finally {
@@ -12579,6 +12741,7 @@
     const editor = noteEditorElement();
     const range = noteSelectionRange();
     if (!editor || !range) return;
+    commitNoteHistory({ immediate: true });
     if (kind === 'bold' || kind === 'italic' || kind === 'strike') {
       document.execCommand(kind === 'bold' ? 'bold' : kind === 'italic' ? 'italic' : 'strikeThrough', false, null);
     } else if (kind === 'code') {
@@ -12653,37 +12816,34 @@
 
   const noteSlash = { open: false, query: '', index: 0 };
 
-  function placeCaretInNote(node, atStart = true) {
+  function placeCaretInNote(node) {
     const range = document.createRange();
     range.selectNodeContents(node);
-    range.collapse(atStart);
+    range.collapse(true);
     const selection = window.getSelection();
     selection.removeAllRanges();
     selection.addRange(range);
   }
 
-  function noteCurrentBlock() {
-    const editor = noteEditorElement();
-    const selection = window.getSelection();
-    if (!editor || !selection?.rangeCount) return null;
-    let node = selection.getRangeAt(0).startContainer;
-    if (node === editor) return null;
-    while (node && node.parentNode && node.parentNode !== editor) node = node.parentNode;
-    return node?.parentNode === editor ? node : null;
+  function articleNotesVisible() {
+    return $('#reader-view').classList.contains('active-view')
+      && $('#reader-sidebar').classList.contains('is-open')
+      && $('#notes-panel').classList.contains('active-panel');
   }
 
   function noteSlashContext() {
     const editor = noteEditorElement();
-    const selection = window.getSelection();
-    if (!editor || !selection?.rangeCount) return null;
-    const range = selection.getRangeAt(0);
-    if (!range.collapsed) return null;
+    if (!articleNotesVisible() || composingNoteEditors.has(editor)) return null;
+    const range = noteEditRange(editor);
+    if (!range?.collapsed) return null;
     const node = range.startContainer;
-    if (node.nodeType !== Node.TEXT_NODE || !editor.contains(node)) return null;
+    if (node.nodeType !== Node.TEXT_NODE) return null;
+    const block = notePlainParagraph(editor, range);
     const before = node.nodeValue.slice(0, range.startOffset);
-    const match = before.match(/(?:^|\s)\/([^\s/]*)$/);
+    if (!block || before !== block.textContent) return null;
+    const match = before.match(/^\/([^\s/]*)$/u);
     if (!match) return null;
-    return { node, query: match[1], start: range.startOffset - match[1].length - 1, end: range.startOffset };
+    return { block, query: match[1] };
   }
 
   function noteSlashMatches() {
@@ -12692,12 +12852,12 @@
     return NOTE_SLASH_ITEMS.filter((item) => `${item.id} ${item.label} ${item.keywords}`.toLowerCase().includes(query));
   }
 
-  function closeNoteSlashMenu() {
+  function closeNoteSlashMenu({ immediate = false } = {}) {
     const menu = $('#note-slash-menu');
+    if (noteSlash.open || immediate) closeTransient(menu, { immediate, duration: 110 });
     noteSlash.open = false;
     noteSlash.query = '';
     noteSlash.index = 0;
-    if (menu) menu.hidden = true;
   }
 
   function renderNoteSlashMenu() {
@@ -12713,74 +12873,78 @@
     menu.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
   }
 
-  function openNoteSlashMenu() {
+  function positionNoteSlashMenu() {
     const menu = $('#note-slash-menu');
-    const selection = window.getSelection();
-    if (!menu || !selection?.rangeCount) return;
-    const rect = selection.getRangeAt(0).getBoundingClientRect();
-    noteSlash.open = true;
-    menu.hidden = false;
-    renderNoteSlashMenu();
+    const editor = noteEditorElement();
+    const range = noteEditRange(editor);
+    if (!noteSlash.open || !range) return;
+    const rect = range.getBoundingClientRect();
+    const bounds = editor.getBoundingClientRect();
+    if (rect.bottom < bounds.top || rect.top > bounds.bottom) { closeNoteSlashMenu(); return; }
     const left = Math.min(Math.max(rect.left, 8), window.innerWidth - menu.offsetWidth - 8);
     const below = rect.bottom + 6;
-    const top = below + menu.offsetHeight > window.innerHeight - 8 ? Math.max(8, rect.top - menu.offsetHeight - 6) : below;
+    const above = below + menu.offsetHeight > window.innerHeight - 8;
+    const top = above ? Math.max(8, rect.top - menu.offsetHeight - 6) : below;
+    menu.dataset.placement = above ? 'above' : 'below';
     menu.style.left = `${Math.round(left)}px`;
     menu.style.top = `${Math.round(top)}px`;
+  }
+
+  function updateNoteSlashMenu() {
+    const context = noteSlashContext();
+    if (!context) { closeNoteSlashMenu(); return; }
+    if (!noteSlash.open || noteSlash.query !== context.query) {
+      noteSlash.open = true;
+      noteSlash.query = context.query;
+      noteSlash.index = 0;
+      openTransient($('#note-slash-menu'));
+      renderNoteSlashMenu();
+    }
+    positionNoteSlashMenu();
   }
 
   function applyNoteSlashCommand(id) {
     const editor = noteEditorElement();
     const context = noteSlashContext();
-    if (!editor) return;
-    if (context) {
-      const range = document.createRange();
-      range.setStart(context.node, context.start);
-      range.setEnd(context.node, context.end);
-      range.deleteContents();
-      placeCaretInNote(context.node, false);
-      const collapsed = document.createRange();
-      collapsed.setStart(context.node, context.start);
-      collapsed.collapse(true);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(collapsed);
-    }
     closeNoteSlashMenu();
-    const block = noteCurrentBlock();
+    if (!context) return;
+    const tex = id === 'math' ? window.prompt('输入 LaTeX 公式', '\\frac{a}{b}') : null;
+    if (id === 'math' && !tex) return;
+    commitNoteHistory({ immediate: true });
+    const block = context.block;
     const create = (html) => {
       const holder = document.createElement('div');
       holder.innerHTML = html;
       return holder.firstElementChild;
     };
     const swap = (element, caretTarget = null) => {
-      if (block) block.replaceWith(element); else editor.appendChild(element);
+      if (block === editor) editor.replaceChildren(element);
+      else block.replaceWith(element);
       placeCaretInNote(caretTarget || element, true);
     };
-    const text = block ? block.textContent.trim() : '';
     if (/^h[123]$/.test(id)) {
-      swap(create(`<${id}>${escapeHTML(text)}</${id}>`));
+      swap(create(`<${id}><br></${id}>`));
     } else if (id === 'todo') {
-      const list = create('<ul class="note-todo"><li data-checked="false"><input type="checkbox" contenteditable="false"></li></ul>');
+      const list = create('<ul class="note-todo"><li data-checked="false"><input type="checkbox" contenteditable="false"><br></li></ul>');
       const item = list.querySelector('li');
-      item.appendChild(document.createTextNode(text));
       swap(list, item);
+      const caret = document.getSelection().getRangeAt(0);
+      caret.setStartAfter(item.firstChild);
+      caret.collapse(true);
     } else if (id === 'ul' || id === 'ol') {
-      const list = create(`<${id}><li>${escapeHTML(text)}</li></${id}>`);
+      const list = create(`<${id}><li><br></li></${id}>`);
       swap(list, list.querySelector('li'));
     } else if (id === 'quote') {
-      swap(create(`<blockquote>${escapeHTML(text)}</blockquote>`));
+      swap(create('<blockquote><br></blockquote>'));
     } else if (id === 'code') {
-      const pre = create('<pre><code></code></pre>');
-      pre.querySelector('code').textContent = text;
+      const pre = create('<pre><code><br></code></pre>');
       swap(pre, pre.querySelector('code'));
       editor.insertBefore(create('<p><br></p>'), pre.nextSibling);
     } else if (id === 'math') {
-      const tex = window.prompt('输入 LaTeX 公式', text || '\\frac{a}{b}');
-      if (!tex) return;
       const node = create('<div class="note-math math-display" contenteditable="false"></div>');
       node.dataset.tex = tex;
       const trailer = create('<p><br></p>');
-      if (block) block.replaceWith(node); else editor.appendChild(node);
+      swap(node);
       node.after(trailer);
       hydrateFrameMath(document);
       placeCaretInNote(trailer, true);
@@ -12790,10 +12954,18 @@
     } else if (id === 'divider') {
       const rule = create('<hr>');
       const trailer = create('<p><br></p>');
-      if (block) block.replaceWith(rule); else editor.appendChild(rule);
+      swap(rule);
       rule.after(trailer);
       placeCaretInNote(trailer, true);
     } else if (id === 'image') {
+      if (block === editor) {
+        editor.replaceChildren();
+        placeCaretInNote(editor, true);
+      } else {
+        swap(create('<p><br></p>'));
+      }
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      commitNoteHistory({ immediate: true });
       $('#insert-image-button')?.click();
       return;
     }
@@ -12801,28 +12973,35 @@
     commitNoteHistory({ immediate: true });
   }
 
-  function closeNoteFormatPalette() {
+  function closeNoteFormatPalette({ immediate = false } = {}) {
     const palette = $('#note-format-palette');
-    if (palette) palette.hidden = true;
+    if (immediate || !palette?.classList.contains('is-closing')) closeTransient(palette, { immediate, duration: 110 });
     $$('#note-format-bar [data-note-menu]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
   }
 
-  function hideNoteFormatBar() {
+  function hideNoteFormatBar({ immediate = false } = {}) {
     const bar = $('#note-format-bar');
-    if (!bar || bar.hidden) return;
-    closeNoteFormatPalette();
-    bar.hidden = true;
+    if (!bar || bar.hidden || (!immediate && bar.classList.contains('is-closing'))) return;
+    closeNoteFormatPalette({ immediate });
+    closeTransient(bar, { immediate, duration: 110 });
+  }
+
+  function closeNotePopovers() {
+    closeNoteSlashMenu({ immediate: true });
+    hideNoteFormatBar({ immediate: true });
+    writingMotion?.reset(document);
   }
 
   function positionNoteFormatBar() {
     const bar = $('#note-format-bar');
     const editor = noteEditorElement();
     const range = noteSelectionRange();
-    if (!bar || !editor || !range) { hideNoteFormatBar(); return; }
+    if (!bar || !editor || !range || !articleNotesVisible() || composingNoteEditors.has(editor)) { hideNoteFormatBar(); return; }
     const rect = range.getBoundingClientRect();
     if (!rect.width && !rect.height) { hideNoteFormatBar(); return; }
     const bounds = editor.getBoundingClientRect();
-    bar.hidden = false;
+    if (rect.bottom < bounds.top || rect.top > bounds.bottom) { hideNoteFormatBar(); return; }
+    openTransient(bar);
     const width = bar.offsetWidth;
     const height = bar.offsetHeight;
     const left = Math.min(
@@ -12830,7 +13009,8 @@
       window.innerWidth - width - 8,
     );
     const above = rect.top - height - 8;
-    const top = above > bounds.top - height ? above : rect.bottom + 8;
+    const top = above >= 8 ? above : Math.min(rect.bottom + 8, window.innerHeight - height - 8);
+    bar.dataset.placement = above >= 8 ? 'above' : 'below';
     bar.style.left = `${Math.round(left)}px`;
     bar.style.top = `${Math.round(Math.max(8, top))}px`;
   }
@@ -12844,7 +13024,7 @@
     palette.dataset.kind = kind;
     palette.innerHTML = NOTE_COLOR_TOKENS.map((token) => `<button type="button" role="menuitem" class="note-format-swatch note-format-swatch-${kind}" data-note-color="${token}" style="--swatch-color:var(--note-${kind === 'mark' ? 'mark-' : ''}${token})" title="${NOTE_COLOR_LABELS[token]}" aria-label="${NOTE_COLOR_LABELS[token]}"></button>`).join('')
       + '<button type="button" role="menuitem" class="note-format-swatch note-format-swatch-none" data-note-color="none" title="清除" aria-label="清除">⌫</button>';
-    palette.hidden = false;
+    openTransient(palette);
     anchor.setAttribute('aria-expanded', 'true');
   }
 
@@ -13029,7 +13209,7 @@
 
   function updateArticleNotesEmptyState(editor = $('#notes-editor')) {
     if (!editor) return;
-    editor.classList.toggle('is-empty', !editor.textContent.trim() && !editor.querySelector('img'));
+    editor.classList.toggle('is-empty', noteEditorIsEmpty(editor));
   }
 
   function bumpArticleNotesRevision(editor = $('#notes-editor')) {
@@ -13046,6 +13226,8 @@
   function prepareArticleNotes(jobId) {
     const editor = $('#notes-editor');
     if (!editor) return null;
+    closeNotePopovers();
+    composingNoteEditors.delete(editor);
     articleNoteImageRange = null;
     notesEditorSession += 1;
     editor.dataset.jobId = String(jobId || '');
@@ -13243,19 +13425,12 @@
     return queueArticleNotesSave(snapshot, { announce });
   }
 
-  function articleNotesSelectionRange() {
-    const editor = $('#notes-editor');
-    const selection = window.getSelection();
-    if (!editor || !selection?.rangeCount) return null;
-    const range = selection.getRangeAt(0);
-    const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement;
-    return anchor === editor || editor.contains(anchor) ? range.cloneRange() : null;
-  }
+  function articleNotesSelectionRange() { return noteEditRange(noteEditorElement())?.cloneRange() || null; }
 
   function restoreArticleNotesRange(range = null) {
     const editor = $('#notes-editor');
     if (!editor) return null;
-    editor.focus();
+    editor.focus({ preventScroll: true });
     const selection = window.getSelection();
     let nextRange = range;
     if (!nextRange || !document.contains(nextRange.startContainer) || !editor.contains(nextRange.startContainer)) {
@@ -13295,6 +13470,7 @@
     articleNoteImageRange = nextRange.cloneRange();
     editor.dispatchEvent(new Event('input', { bubbles: true }));
     commitNoteHistory({ immediate: true });
+    writingMotion?.revealImage(editor, image);
     await saveNotes();
   }
 
@@ -13315,14 +13491,16 @@
       if (!editor || editor.contentEditable !== 'true') return;
       restoreArticleNotesRange(articleNotesSelectionRange() || articleNoteImageRange);
       const [command, value] = articleNoteFormatCommands[button.dataset.format] || [];
+      commitNoteHistory({ immediate: true });
       if (command) document.execCommand(command, false, value || null);
       articleNoteImageRange = articleNotesSelectionRange();
       editor.dispatchEvent(new Event('input', { bubbles: true }));
-    commitNoteHistory({ immediate: true });
+      commitNoteHistory({ immediate: true });
     });
   });
 
   $('#save-notes-button').addEventListener('click', () => saveNotes());
+  const checkpointArticleNoteEdit = () => commitNoteHistory({ immediate: true });
   $('#notes-editor').addEventListener('input', (event) => {
     if (request.closeGate) return;
     const editor = event.currentTarget;
@@ -13343,22 +13521,40 @@
   // The bar follows the selection rather than the caret, so it is driven by
   // selectionchange and repositioned whenever the panel moves under it.
   document.addEventListener('selectionchange', () => {
+    if (noteSlash.open) {
+      if (noteSlashContext()) positionNoteSlashMenu();
+      else closeNoteSlashMenu();
+    }
     if (document.activeElement?.closest('#note-format-bar')) return;
     positionNoteFormatBar();
   });
   // Electron's Edit menu and the trackpad gesture reach the editor as
   // beforeinput rather than a key event, so route those through the same stack.
   $('#notes-editor').addEventListener('beforeinput', (event) => {
-    if (event.inputType !== 'historyUndo' && event.inputType !== 'historyRedo') return;
-    event.preventDefault();
-    stepNoteHistory(event.inputType === 'historyUndo' ? -1 : 1);
+    if (isComposingNoteInput(event)) return;
+    if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
+      event.preventDefault();
+      stepNoteHistory(event.inputType === 'historyUndo' ? -1 : 1);
+    } else {
+      applyNoteMarkdownInput(event, checkpointArticleNoteEdit);
+    }
   });
-  $('#notes-editor').addEventListener('input', () => {
+  $('#notes-editor').addEventListener('input', (event) => {
+    if (request.closeGate || isComposingNoteInput(event)) return;
+    applyNoteMarkdownInput(event, checkpointArticleNoteEdit);
     commitNoteHistory();
-    const context = noteSlashContext();
-    if (!context) { closeNoteSlashMenu(); return; }
-    noteSlash.query = context.query;
-    if (noteSlash.open) renderNoteSlashMenu(); else openNoteSlashMenu();
+    updateNoteSlashMenu();
+  });
+  $('#notes-editor').addEventListener('compositionstart', (event) => {
+    composingNoteEditors.add(event.currentTarget);
+    if (noteHistory.timer) checkpointArticleNoteEdit();
+    closeNoteSlashMenu({ immediate: true });
+    hideNoteFormatBar({ immediate: true });
+  });
+  $('#notes-editor').addEventListener('compositionend', (event) => {
+    composingNoteEditors.delete(event.currentTarget);
+    commitNoteHistory();
+    updateNoteSlashMenu();
   });
   $('#note-slash-menu').addEventListener('pointerdown', (event) => event.preventDefault());
   $('#note-slash-menu').addEventListener('click', (event) => {
@@ -13390,9 +13586,14 @@
     const action = event.target.closest('[data-note-format]');
     if (action) { closeNoteFormatPalette(); applyNoteInlineFormat(action.dataset.noteFormat); }
   });
-  $('#notes-panel')?.addEventListener('scroll', () => positionNoteFormatBar(), { passive: true, capture: true });
+  $('#notes-panel')?.addEventListener('scroll', () => {
+    positionNoteFormatBar();
+    positionNoteSlashMenu();
+  }, { passive: true, capture: true });
+  window.addEventListener('resize', closeNotePopovers);
   document.addEventListener('pointerdown', (event) => {
-    if (event.target.closest('#note-format-bar') || event.target.closest('#notes-editor')) return;
+    if (event.target.closest('#note-format-bar, #note-slash-menu, #notes-editor')) return;
+    closeNoteSlashMenu();
     hideNoteFormatBar();
   }, { capture: true });
   const rememberArticleNoteSelection = () => {
@@ -13412,6 +13613,7 @@
   $('#notes-editor').addEventListener('mouseup', rememberArticleNoteSelection);
   $('#notes-editor').addEventListener('keyup', rememberArticleNoteSelection);
   $('#notes-editor').addEventListener('keydown', (event) => {
+    if (isComposingNoteInput(event)) { event.stopPropagation(); return; }
     const modifier = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
     if (modifier && key === 'z') {
@@ -13424,7 +13626,8 @@
       stepNoteHistory(1);
       return;
     }
-    if (noteSlash.open) {
+    if (noteSlash.open && !noteSlashContext()) closeNoteSlashMenu();
+    if (noteSlash.open && !modifier && !event.altKey && !event.shiftKey) {
       const matches = noteSlashMatches();
       if (event.key === 'Escape') { event.preventDefault(); closeNoteSlashMenu(); return; }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -13453,6 +13656,7 @@
       articleNoteImageRange = range.cloneRange();
     } else if (modifier && (key === 'b' || key === 'i')) {
       event.preventDefault();
+      checkpointArticleNoteEdit();
       document.execCommand(key === 'b' ? 'bold' : 'italic', false, null);
       event.currentTarget.dispatchEvent(new Event('input', { bubbles: true }));
     } else if (modifier && event.key === 'Enter') {
@@ -13475,8 +13679,7 @@
       return;
     }
     event.preventDefault();
-    insertPlainTextAtSelection(event.currentTarget, event.clipboardData?.getData('text/plain') || '');
-    event.currentTarget.dispatchEvent(new Event('input', { bubbles: true }));
+    pasteNoteText(event.currentTarget, event.clipboardData, event.currentTarget.dataset.jobId, checkpointArticleNoteEdit);
   });
   $('#insert-image-button').addEventListener('mousedown', (event) => {
     event.preventDefault();

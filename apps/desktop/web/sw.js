@@ -1,6 +1,6 @@
 // Installability + app-shell caching. Documents and API responses always come
 // from the network: a stale library listing is worse than an offline notice.
-const SHELL_CACHE = 'guzi-shell-v12';
+const SHELL_CACHE = 'guzi-shell-v13';
 const SHELL_ASSETS = [
   '/library',
   '/web/styles.css',
@@ -9,6 +9,7 @@ const SHELL_ASSETS = [
   '/web/graph-model.js',
   '/web/graph-view.js',
   '/web/annotation-operations.js',
+  '/web/writing-motion.js',
   '/web/app.js',
   '/web/assets/app-icon.png',
   '/web/assets/brand-glyph-96.png',

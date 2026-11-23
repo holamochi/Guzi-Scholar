@@ -32,6 +32,38 @@ async function waitForLibrary(page) {
   await page.locator('#recent-list .library-row').first().waitFor();
 }
 
+async function assertTextCaretGlide(page, fieldSelector, overlaySelector) {
+  const field = page.locator(fieldSelector);
+  const caret = page.locator(`${overlaySelector} .writing-motion-caret:not([hidden])`);
+  await field.focus();
+  await page.locator(`${fieldSelector}.writing-motion-caret-active`).waitFor();
+  await caret.waitFor();
+  const startX = await caret.evaluate((marker) => marker.getBoundingClientRect().left);
+  const trace = await caret.evaluateHandle((marker) => {
+    const frames = [];
+    const observer = new MutationObserver(() => {
+      if (marker.hasAttribute('data-moving')) frames.push(marker.getBoundingClientRect().left);
+    });
+    observer.observe(marker, { attributes: true, attributeFilter: ['style'] });
+    return { frames, observer };
+  });
+  try {
+    await field.press('w');
+    await page.waitForFunction(({ overlaySelector, startX }) => {
+      const marker = document.querySelector(`${overlaySelector} .writing-motion-caret:not([hidden]):not([data-moving])`);
+      return marker && marker.getBoundingClientRect().left > startX + 1;
+    }, { overlaySelector, startX });
+    const endX = await caret.evaluate((marker) => marker.getBoundingClientRect().left);
+    const frames = await trace.evaluate(({ frames }) => frames);
+    if (!frames.some((x) => x > startX + 0.5 && x < endX - 0.5)) {
+      throw new Error(`${fieldSelector} 输入单个字符时光标未经过中间位置（${JSON.stringify({ startX, frames, endX })}）`);
+    }
+  } finally {
+    await trace.evaluate(({ observer }) => observer.disconnect());
+    await trace.dispose();
+  }
+}
+
 (async () => {
   let browser;
   let browserSession;
@@ -204,16 +236,29 @@ async function waitForLibrary(page) {
     await page.mouse.click(Math.max(4, editorBox.x - 8), Math.max(4, editorBox.y - 8));
     await libraryEditor.waitFor({ state: 'hidden' });
 
-    // 4. New text fields are placeholders, not pre-filled values.
-    await page.locator('#create-folder-button').click();
-    await libraryEditor.waitFor({ state: 'visible' });
-    const folderInput = page.locator('#editor-folder-name');
-    if (!(await folderInput.count())) throw new Error('新建文件夹缺少名称输入框。');
-    const folderInputValue = await folderInput.inputValue();
-    const folderPlaceholder = await folderInput.getAttribute('placeholder');
-    if (folderInputValue !== '' || !String(folderPlaceholder || '').trim()) throw new Error(`新建文件夹仍使用默认填充值（value=${JSON.stringify(folderInputValue)}, placeholder=${JSON.stringify(folderPlaceholder)}）`);
-    await page.locator('#library-editor-cancel').click();
-    await libraryEditor.waitFor({ state: 'hidden' });
+    // 4. Check caret motion in the search and folder fields, and the folder placeholder.
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    try {
+      const search = page.locator('#library-search');
+      const searchValue = await search.inputValue();
+      await search.fill('');
+      await assertTextCaretGlide(page, '#library-search', 'body > .writing-motion-overlay');
+      await search.fill(searchValue);
+
+      await page.locator('#create-folder-button').click();
+      await libraryEditor.waitFor({ state: 'visible' });
+      const folderInput = page.locator('#editor-folder-name');
+      if (!(await folderInput.count())) throw new Error('新建文件夹缺少名称输入框。');
+      const folderInputValue = await folderInput.inputValue();
+      const folderPlaceholder = await folderInput.getAttribute('placeholder');
+      if (folderInputValue !== '' || !String(folderPlaceholder || '').trim()) throw new Error(`新建文件夹仍使用默认填充值（value=${JSON.stringify(folderInputValue)}, placeholder=${JSON.stringify(folderPlaceholder)}）`);
+      await assertTextCaretGlide(page, '#editor-folder-name', 'dialog#library-editor-dialog[open] .writing-motion-overlay');
+      await page.locator('#library-editor-cancel').click();
+      await libraryEditor.waitFor({ state: 'hidden' });
+      await page.locator('body > .writing-motion-overlay .writing-motion-caret[hidden]').waitFor({ state: 'attached' });
+    } finally {
+      await page.emulateMedia({ reducedMotion: null });
+    }
 
     const initialResizerValues = await page.locator('#library-columns [data-column-resizer]').evaluateAll((handles) => handles.map((handle) => handle.getAttribute('aria-valuenow')));
     if (!initialResizerValues.length || initialResizerValues.some((value) => value === null || value.trim() === '' || !Number.isFinite(Number(value)))) throw new Error(`表头列宽控制柄缺少有效 aria-valuenow（${JSON.stringify(initialResizerValues)}）`);
