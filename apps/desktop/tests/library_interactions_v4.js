@@ -32,6 +32,17 @@ async function waitForLibrary(page) {
   await page.locator('#recent-list .library-row').first().waitFor();
 }
 
+async function pressColumnResizeKey(resizer, key) {
+  const previousHandle = await resizer.elementHandle();
+  try {
+    await resizer.press(key);
+    // The save response rebuilds the header. A GET can see the new width before that render.
+    await previousHandle.waitForElementState('hidden');
+  } finally {
+    await previousHandle.dispose();
+  }
+}
+
 async function assertTextCaretGlide(page, fieldSelector, overlaySelector) {
   const field = page.locator(fieldSelector);
   const caret = page.locator(`${overlaySelector} .writing-motion-caret:not([hidden])`);
@@ -483,26 +494,14 @@ async function assertTextCaretGlide(page, fieldSelector, overlaySelector) {
     const initialAriaWidth = Number(await nameResizer.getAttribute('aria-valuenow'));
     if (!Number.isFinite(initialAriaWidth) || initialAriaWidth <= 0) throw new Error(`名称列控制柄 aria-valuenow 无效（${initialAriaWidth}）`);
 
-    await nameResizer.focus();
-    await nameResizer.press('ArrowRight');
-    await page.waitForFunction(async ({ id, before }) => {
-      const payload = await (await fetch('/api/library')).json();
-      const column = (payload.library?.display?.columns || []).find((item) => item.id === id);
-      return Number(column?.width) > before;
-    }, { id: 'name', before: initialAriaWidth });
+    await pressColumnResizeKey(nameResizer, 'ArrowRight');
     const afterRightPayload = await api('/api/library');
     const afterRightWidth = Number((afterRightPayload.library?.display?.columns || []).find((column) => column.id === 'name')?.width);
     nameResizer = page.locator('#library-columns [data-column-resizer="name"]').first();
     const afterRightAriaWidth = Number(await nameResizer.getAttribute('aria-valuenow'));
     if (!Number.isFinite(afterRightWidth) || afterRightWidth <= initialAriaWidth || afterRightAriaWidth !== afterRightWidth) throw new Error(`ArrowRight 列宽或 aria-valuenow 未正确更新（before=${initialAriaWidth}, stored=${afterRightWidth}, aria=${afterRightAriaWidth}）`);
 
-    await nameResizer.focus();
-    await nameResizer.press('ArrowLeft');
-    await page.waitForFunction(async ({ id, before }) => {
-      const payload = await (await fetch('/api/library')).json();
-      const column = (payload.library?.display?.columns || []).find((item) => item.id === id);
-      return Number(column?.width) < before;
-    }, { id: 'name', before: afterRightWidth });
+    await pressColumnResizeKey(nameResizer, 'ArrowLeft');
     const afterLeftPayload = await api('/api/library');
     const afterLeftWidth = Number((afterLeftPayload.library?.display?.columns || []).find((column) => column.id === 'name')?.width);
     nameResizer = page.locator('#library-columns [data-column-resizer="name"]').first();
