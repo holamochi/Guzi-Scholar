@@ -11,6 +11,7 @@ const { verifyPublishedMacRelease } = require('./published_mac_release.cjs');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guzi-published-mac-release-'));
 const key = crypto.generateKeyPairSync('ed25519');
 const publicKey = key.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+const LEGACY_REPOSITORY = 'Drangon-Li/Guzi-Scholar';
 const version = '0.6.9', tag = `v${version}`, commit = 'a'.repeat(40);
 const archiveName = `Guzi-Scholar-${version}-arm64-stable.zip`;
 const hash = (bytes, algorithm = 'sha256') => crypto.createHash(algorithm).update(bytes).digest(algorithm === 'sha256' ? 'hex' : 'base64');
@@ -18,28 +19,32 @@ const jsonBytes = (value) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 const record = (name, bytes) => ({ name, size: bytes.length, sha256: hash(bytes), sha512: hash(bytes, 'sha512') });
 let count = 0;
 
-function fixture({ editManifest = () => {}, editProvenance = () => {}, digests = true } = {}) {
+function fixture({ releaseVersion = version, repository = REPOSITORY, descriptorRepository = REPOSITORY, editManifest = () => {}, editProvenance = () => {}, digests = true } = {}) {
   const directory = path.join(root, String(++count));
   fs.mkdirSync(directory);
+  const releaseTag = `v${releaseVersion}`;
+  const releaseArchiveName = `Guzi-Scholar-${releaseVersion}-arm64-stable.zip`;
   const archive = Buffer.from('An offline archive fixture signed only for these unit tests.');
-  const mac = { ...record(archiveName, archive), platform: 'darwin', arch: 'arm64', kind: 'sparkle', minimum_system_version: '12.0', ed_signature: crypto.sign(null, archive, key.privateKey).toString('base64'), url: `https://github.com/${REPOSITORY}/releases/download/${tag}/${archiveName}` };
-  const manifest = { schema: 2, repository: REPOSITORY, version, channel: 'stable', published_at: '2026-10-26T18:46:33.288Z', artifacts: [mac] };
+  const mac = { ...record(releaseArchiveName, archive), platform: 'darwin', arch: 'arm64', kind: 'sparkle', minimum_system_version: '12.0', ed_signature: crypto.sign(null, archive, key.privateKey).toString('base64'), url: `https://github.com/${repository}/releases/download/${releaseTag}/${releaseArchiveName}` };
+  const manifest = { schema: 2, repository, version: releaseVersion, channel: 'stable', published_at: '2026-10-26T18:46:33.288Z', artifacts: [mac] };
   editManifest(manifest);
-  const payloads = new Map([[archiveName, archive], [`Guzi-Scholar-${version}-arm64-stable.dmg`, Buffer.from('not downloaded DMG')], ['third-party-source.tar.gz', Buffer.from('not downloaded source')], ['update-manifest.json', jsonBytes(manifest)]]);
-  const provenance = { schema: 1, repository: REPOSITORY, version, tag, channel: 'stable', commit, source: `https://github.com/${REPOSITORY}/commit/${commit}`, sparkle_public_key: publicKey, assets: [...payloads].map(([name, bytes]) => record(name, bytes)) };
+  const payloads = new Map([[releaseArchiveName, archive], [`Guzi-Scholar-${releaseVersion}-arm64-stable.dmg`, Buffer.from('not downloaded DMG')], ['third-party-source.tar.gz', Buffer.from('not downloaded source')], ['update-manifest.json', jsonBytes(manifest)]]);
+  const provenance = { schema: 1, repository, version: releaseVersion, tag: releaseTag, channel: 'stable', commit, source: `https://github.com/${repository}/commit/${commit}`, sparkle_public_key: publicKey, assets: [...payloads].map(([name, bytes]) => record(name, bytes)) };
   editProvenance(provenance);
   payloads.set('release-provenance.json', jsonBytes(provenance));
   payloads.set('SHA256SUMS', Buffer.from([...payloads].map(([name, bytes]) => `${hash(bytes)}  ${name}\n`).join('')));
   const id = 100;
-  const release = { id, url: `https://api.github.com/repos/${REPOSITORY}/releases/${id}`, assets_url: `https://api.github.com/repos/${REPOSITORY}/releases/${id}/assets`, html_url: `https://github.com/${REPOSITORY}/releases/tag/${tag}`, tag_name: tag, target_commitish: commit, draft: false, prerelease: false, published_at: '2026-10-26T18:57:11Z', assets: [...payloads].map(([name, bytes], index) => ({ id: index + 1, name, size: bytes.length, state: 'uploaded', url: `https://api.github.com/repos/${REPOSITORY}/releases/assets/${index + 1}`, browser_download_url: `https://github.com/${REPOSITORY}/releases/download/${tag}/${name}`, ...(digests ? { digest: `sha256:${hash(bytes)}` } : {}) })) };
-  for (const name of [archiveName, 'update-manifest.json', 'release-provenance.json', 'SHA256SUMS']) fs.writeFileSync(path.join(directory, name), payloads.get(name));
+  const api = `https://api.github.com/repos/${descriptorRepository}`;
+  const web = `https://github.com/${descriptorRepository}/releases`;
+  const release = { id, url: `${api}/releases/${id}`, assets_url: `${api}/releases/${id}/assets`, html_url: `${web}/tag/${releaseTag}`, tag_name: releaseTag, target_commitish: commit, draft: false, prerelease: false, published_at: '2026-10-26T18:57:11Z', assets: [...payloads].map(([name, bytes], index) => ({ id: index + 1, name, size: bytes.length, state: 'uploaded', url: `${api}/releases/assets/${index + 1}`, browser_download_url: `${web}/download/${releaseTag}/${name}`, ...(digests ? { digest: `sha256:${hash(bytes)}` } : {}) })) };
+  for (const name of [releaseArchiveName, 'update-manifest.json', 'release-provenance.json', 'SHA256SUMS']) fs.writeFileSync(path.join(directory, name), payloads.get(name));
   const releaseFile = path.join(directory, 'github-release.json');
   const writeRelease = () => fs.writeFileSync(releaseFile, jsonBytes(release));
   writeRelease();
-  return { directory, archive, release, writeRelease };
+  return { directory, archive, release, releaseVersion, writeRelease };
 }
 
-function verify(value, options = {}) { return verifyPublishedMacRelease(value.directory, { version, publicKey, ...options }); }
+function verify(value, options = {}) { return verifyPublishedMacRelease(value.directory, { version: value.releaseVersion, publicKey, ...options }); }
 function rejects(edit, expected, options) {
   const value = fixture(options);
   edit(value);
@@ -63,6 +68,20 @@ try {
   assert.equal(result.provenance.source, `https://github.com/${REPOSITORY}/commit/${commit}`);
   assert.equal(fs.readdirSync(value.directory).length, 5, 'Selective download needs no DMG or source archive');
   assert.equal(verify(fixture({ digests: false })).version, version, 'Older GitHub metadata may omit digests');
+
+  const historical = { releaseVersion: '0.7.1', repository: LEGACY_REPOSITORY };
+  const transferred = fixture(historical);
+  const verified = verify(transferred);
+  assert.equal(verified.manifest.repository, LEGACY_REPOSITORY);
+  assert.equal(verified.manifest.artifacts[0].url, `https://github.com/${LEGACY_REPOSITORY}/releases/download/${verified.tag}/${verified.archiveName}`);
+  assert.equal(verified.provenance.source, `https://github.com/${LEGACY_REPOSITORY}/commit/${commit}`);
+  assert.deepEqual(verified.release, transferred.release);
+  assert.equal(verify(fixture({ ...historical, descriptorRepository: LEGACY_REPOSITORY })).version, historical.releaseVersion);
+  assert.equal(verify(fixture({ releaseVersion: '0.7.2' })).manifest.repository, REPOSITORY);
+  rejects(() => {}, /provenance repository mismatch/u, { ...historical, releaseVersion: '0.7.2' });
+  rejects(() => {}, /GitHub release repository mismatch/u, { releaseVersion: '0.7.2', descriptorRepository: LEGACY_REPOSITORY });
+  rejects(({ release }) => { release.assets[0].browser_download_url = release.assets[0].browser_download_url.replace(REPOSITORY, LEGACY_REPOSITORY); }, /download URL mismatch/u, historical);
+  rejects(() => {}, /更新包地址与发布附件不匹配/u, { ...historical, editManifest: (manifest) => { manifest.artifacts[0].url = manifest.artifacts[0].url.replace(LEGACY_REPOSITORY, REPOSITORY); } });
 
   assert.throws(() => verify(value, { version: '0.6.10' }), /tag URL|version mismatch/u);
   assert.throws(() => verify(value, { version: '0.6.9-beta.1' }), /stable release/u);

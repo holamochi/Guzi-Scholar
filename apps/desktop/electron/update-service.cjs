@@ -1,6 +1,6 @@
 'use strict';
 const https = require('node:https');
-const REPOSITORY = 'Drangon-Li/Guzi-Scholar';
+const REPOSITORY = 'holamochi/Guzi-Scholar';
 const DOWNLOAD_HOSTS = new Set(['api.github.com', 'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com']);
 function parseVersion(value) {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u.exec(String(value || ''));
@@ -29,9 +29,9 @@ function versionChannel(version) {
   if (/^beta\.(?:0|[1-9]\d*)$/u.test(parsed.prerelease)) return 'beta';
   throw new Error('该版本不属于稳定版或测试版更新通道。');
 }
-function assetURL(tag, name) {
+function assetURL(tag, name, repository = REPOSITORY) {
   if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/u.test(name)) throw new Error('更新附件名称无效。');
-  return `https://github.com/${REPOSITORY}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+  return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
 }
 function releasePageURL(version) {
   return `https://github.com/${REPOSITORY}/releases/tag/v${encodeURIComponent(parseVersion(version).raw)}`;
@@ -69,14 +69,14 @@ function fetchJSON(value, { maxBytes = 4 * 1024 * 1024, timeout = 15000, redirec
   });
 }
 function base64Digest(value, bytes) { return typeof value === 'string' && Buffer.from(value, 'base64').length === bytes && Buffer.from(value, 'base64').toString('base64') === value; }
-function validateReleaseManifest(payload, { platform, arch, channel, release }) {
-  if (payload?.schema !== 2 || payload.repository !== REPOSITORY || !Array.isArray(payload.artifacts)) throw new Error('更新清单格式或仓库身份不匹配。');
+function validateReleaseManifest(payload, { platform, arch, channel, release, repository = REPOSITORY }) {
+  if (payload?.schema !== 2 || payload.repository !== repository || !Array.isArray(payload.artifacts)) throw new Error('更新清单格式或仓库身份不匹配。');
   const version = parseVersion(payload.version).raw;
   if (versionChannel(version) !== channel || payload.channel !== channel || release.tag_name !== `v${version}` || release.draft !== false || release.prerelease !== (channel === 'beta')) throw new Error('更新版本、发布状态或通道不匹配。');
   const kind = platform === 'darwin' ? 'sparkle' : platform === 'win32' ? 'nsis' : '';
   const candidates = payload.artifacts.filter((item) => item.platform === platform && item.arch === arch && item.kind === kind);
   if (!kind || candidates.length !== 1) throw new Error('发布缺少当前设备唯一对应的更新包。');
-  const item = candidates[0], downloadURL = assetURL(release.tag_name, item.name);
+  const item = candidates[0], downloadURL = assetURL(release.tag_name, item.name, repository);
   if (item.url !== downloadURL || !item.name.endsWith(platform === 'darwin' ? '.zip' : '.exe')) throw new Error('更新包地址与发布附件不匹配。');
   if (!Number.isSafeInteger(item.size) || item.size < 1 || item.size > 4 * 1024 ** 3 || !/^[a-f0-9]{64}$/u.test(item.sha256 || '') || !base64Digest(item.sha512, 64)) throw new Error('更新包缺少有效的大小或校验值。');
   if (platform === 'darwin' && !base64Digest(item.ed_signature, 64)) throw new Error('macOS 更新包缺少有效的 Ed25519 签名。');
@@ -86,7 +86,7 @@ function validateReleaseManifest(payload, { platform, arch, channel, release }) 
   if (!payload.published_at || !Number.isFinite(Date.parse(payload.published_at))) throw new Error('更新发布时间无效。');
   return Object.freeze({ version, channel, platform, arch, downloadURL, assetName: item.name, size: item.size, sha256: item.sha256, sha512: item.sha512,
     ...(platform === 'darwin' ? { edSignature: item.ed_signature } : {}), minimumSystemVersion: item.minimum_system_version,
-    notes: String(payload.notes || '').slice(0, 8000), publishedAt: payload.published_at, repository: REPOSITORY });
+    notes: String(payload.notes || '').slice(0, 8000), publishedAt: payload.published_at, repository });
 }
 async function readChannelRelease({ currentVersion, channel, fetcher = fetchJSON }) {
   if (!['stable', 'beta'].includes(channel) || versionChannel(currentVersion) !== channel) throw new Error('当前版本与更新通道不匹配。');

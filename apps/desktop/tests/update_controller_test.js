@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const { createUpdateController, systemSupports } = require('../electron/update-controller.cjs');
-const candidate = { repository: 'Drangon-Li/Guzi-Scholar', status: 'available', version: '0.6.3', channel: 'stable', platform: 'darwin', arch: 'arm64', minimumSystemVersion: '12.0', sha256: 'a'.repeat(64), size: 100 };
+const candidate = { repository: 'holamochi/Guzi-Scholar', status: 'available', version: '0.6.3', channel: 'stable', platform: 'darwin', arch: 'arm64', minimumSystemVersion: '12.0', sha256: 'a'.repeat(64), size: 100 };
 function fixture() {
   const calls = []; const state = { cached: null, saveCancelled: false, downloadError: false, installError: false, discoveryError: false };
   const adapter = {

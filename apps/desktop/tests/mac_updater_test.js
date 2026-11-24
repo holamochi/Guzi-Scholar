@@ -9,7 +9,7 @@ const { createMacUpdater } = require('../electron/mac-updater.cjs');
 const { buildOptions } = require('../scripts/build-mac-target.cjs');
 const key = Buffer.alloc(32, 7).toString('base64');
 const bytes = Buffer.from('signed archive fixture');
-const original = Object.freeze({ version: '0.7.0', channel: 'stable', platform: 'darwin', arch: 'arm64', downloadURL: 'https://github.com/Drangon-Li/Guzi-Scholar/releases/download/v0.7.0/Guzi-Scholar-0.7.0-arm64-stable.zip', assetName: 'Guzi-Scholar-0.7.0-arm64-stable.zip', size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), sha512: crypto.createHash('sha512').update(bytes).digest('base64'), edSignature: Buffer.alloc(64, 8).toString('base64'), repository: 'Drangon-Li/Guzi-Scholar', notes: '<test>&"', minimumSystemVersion: '12.0' });
+const original = Object.freeze({ version: '0.7.0', channel: 'stable', platform: 'darwin', arch: 'arm64', downloadURL: 'https://github.com/holamochi/Guzi-Scholar/releases/download/v0.7.0/Guzi-Scholar-0.7.0-arm64-stable.zip', assetName: 'Guzi-Scholar-0.7.0-arm64-stable.zip', size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), sha512: crypto.createHash('sha512').update(bytes).digest('base64'), edSignature: Buffer.alloc(64, 8).toString('base64'), repository: 'holamochi/Guzi-Scholar', notes: '<test>&"', minimumSystemVersion: '12.0' });
 const pause = () => new Promise((resolve) => setImmediate(resolve));
 async function until(predicate) { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise((resolve) => setTimeout(resolve, 5)); } throw new Error('Fixture did not reach expected event'); }
 async function main() {
@@ -123,7 +123,7 @@ async function main() {
     assert.equal(beta.configuration.productName, '谷子学术测试版');
     assert.equal(beta.configuration.artifactName, 'Guzi-Scholar-${version}-${arch}-beta.${ext}');
     assert.equal(beta.configuration.extraMetadata.updater.publicKey, beta.configuration.mac.extendInfo.SUPublicEDKey);
-    assert.equal(beta.configuration.extraMetadata.updater.repository, 'Drangon-Li/Guzi-Scholar');
+    assert.equal(beta.configuration.extraMetadata.updater.repository, 'holamochi/Guzi-Scholar');
     assert(!beta.args.some((argument) => argument.includes('artifactName=')), 'Legacy internal artifact override cannot hide the update channel');
     assert.throws(() => buildOptions('zip', 'internal', { GUZI_UPDATE_CHANNEL: 'stable' }), /PUBLIC_KEY/u);
     assert.equal(buildOptions('dmg', 'local-test', { GUZI_UPDATE_CHANNEL: 'beta' }).updater.enabled, false);

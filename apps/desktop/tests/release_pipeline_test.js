@@ -47,13 +47,17 @@ class FakeAPI {
     this.mutations.push([route, options.method]);
     if (route === '/releases') {
       const release = { ...JSON.parse(options.body), id: this.nextID++ };
+      release.html_url = `https://github.com/holamochi/Guzi-Scholar/releases/tag/untagged-${release.id}`;
       this.items.push(release);
       return release;
     }
     if (route.startsWith('https://uploads.github.com/')) {
       const url = new URL(route);
       const id = this.nextID++;
-      const asset = { id, name: url.searchParams.get('name'), release: Number(/releases\/(\d+)/u.exec(route)[1]), size: options.body.length, bytes: Buffer.from(options.body) };
+      const release = this.items.find((item) => item.id === Number(/releases\/(\d+)/u.exec(route)[1]));
+      const name = url.searchParams.get('name');
+      const asset = { id, name, release: release.id, size: options.body.length, bytes: Buffer.from(options.body),
+        browser_download_url: `https://github.com/holamochi/Guzi-Scholar/releases/download/untagged-${release.id}/${encodeURIComponent(name)}` };
       this.payloads.set(id, asset);
       return asset;
     }
@@ -88,7 +92,8 @@ async function main() {
     fs.writeFileSync(filename, original);
   }
   const git = (args) => args[0] === 'rev-parse' ? context.commit : '';
-  assert.deepEqual(preflight(repo, context.tag, REPOSITORY, git), context);
+  assert.deepEqual(preflight(repo, context.tag, 'holamochi/Guzi-Scholar', git), context);
+  assert.throws(() => preflight(repo, context.tag, 'Drangon-Li/Guzi-Scholar', git), /canonical/u);
   assert.throws(() => preflight(repo, context.tag, 'old-owner/Guzi-Scholar', git), /canonical/u);
   assert.throws(() => preflight(repo, context.tag, REPOSITORY, (args) => { if (args[0] === 'merge-base') throw new Error('not ancestor'); return context.commit; }), /ancestor/u);
   fs.writeFileSync(path.join(repo, 'apps/desktop/package-lock.json'), JSON.stringify({ version: '0.6.2' }));
@@ -103,6 +108,12 @@ async function main() {
   const macRelease = await draft(macAPI, macOnly.directory, context);
   assert.doesNotMatch(macRelease.body, /Windows/u);
   const macReports = reports(macManifest);
+  const manifestAsset = [...macAPI.payloads.values()].find((asset) => asset.name === 'update-manifest.json');
+  const canonicalManifestURL = manifestAsset.browser_download_url;
+  manifestAsset.browser_download_url = canonicalManifestURL.replace('holamochi', 'Drangon-Li');
+  await assert.rejects(promote(macAPI, context, macReports, '123', publicKey), /GitHub asset URL mismatch/u);
+  assert.equal(macRelease.draft, true);
+  manifestAsset.browser_download_url = canonicalManifestURL;
   await assert.rejects(promote(macAPI, context, {}, '123', publicKey), /Acceptance report required: darwin/u);
   assert.equal(macRelease.draft, true);
   const macDownload = path.join(root, 'downloaded-mac-candidate');
@@ -123,6 +134,7 @@ async function main() {
   await promote(macAPI, context, macReports, '123', publicKey);
   assert.equal(macRelease.draft, false);
   assert.match(macRelease.body, /通过 macOS 的升级验收/u);
+  assert.match(macRelease.body, /v0\.7\.1 或更早版本.*手动升级一次/u);
   assert.doesNotMatch(macRelease.body, /Windows/u);
   const implicitWindows = fixture();
   assert.throws(() => prepareBundle(implicitWindows.directory, context, implicitWindows.signature), /explicit includeWindows/u);

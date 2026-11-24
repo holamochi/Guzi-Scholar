@@ -89,7 +89,7 @@ async function prepare() {
     ...build, appId: bundleID, productName: product,
     directories: { output: path.join(root, 'build') },
     afterPack: path.join(desktopRoot, 'scripts/after-pack.cjs'),
-    extraMetadata: { version: initialVersion, localTestBuild: runID, main: 'electron/updater-probe-main.cjs', updaterProbe: { root, publicKey, protocol: 2 }, updater: { enabled: true, channel: 'stable', publicKey, repository: 'Drangon-Li/Guzi-Scholar' } },
+    extraMetadata: { version: initialVersion, localTestBuild: runID, main: 'electron/updater-probe-main.cjs', updaterProbe: { root, publicKey, protocol: 2 }, updater: { enabled: true, channel: 'stable', publicKey, repository: 'holamochi/Guzi-Scholar' } },
     extraResources: [...build.extraResources, { from: path.join(__dirname, 'fixtures/updater-probe-main.cjs'), to: 'app/electron/updater-probe-main.cjs' }, { from: addon, to: 'sparkle-bridge.node' }],
     extraFiles: [{ from: path.join(sparkleRoot, 'Sparkle.framework'), to: 'Frameworks/Sparkle.framework' }],
     mac: { ...build.mac, identity: '-', hardenedRuntime: false, notarize: false, extendInfo: { ...build.mac.extendInfo, CFBundleDisplayName: product, CFBundleName: product, SUPublicEDKey: publicKey, SUEnableAutomaticChecks: false, SUAllowsAutomaticUpdates: false, SUAutomaticallyUpdate: false, SUVerifyUpdateBeforeExtraction: true, SUFeedURL: 'http://127.0.0.1/unused' } },

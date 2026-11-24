@@ -13,8 +13,8 @@ const { createWindowsBuildConfig, identities } = require('../../../platforms/win
 
 const bytes = Buffer.from('isolated NSIS contract fixture');
 const name = 'Guzi-Scholar-0.6.3-windows-x64-setup.exe';
-const candidate = { repository: 'Drangon-Li/Guzi-Scholar', version: '0.6.3', channel: 'stable', platform: 'win32', arch: 'x64', assetName: name,
-  downloadURL: `https://github.com/Drangon-Li/Guzi-Scholar/releases/download/v0.6.3/${name}`,
+const candidate = { repository: 'holamochi/Guzi-Scholar', version: '0.6.3', channel: 'stable', platform: 'win32', arch: 'x64', assetName: name,
+  downloadURL: `https://github.com/holamochi/Guzi-Scholar/releases/download/v0.6.3/${name}`,
   size: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
   sha512: crypto.createHash('sha512').update(bytes).digest('base64'), minimumSystemVersion: '10.0.18362' };
 const feed = () => ({ version: candidate.version, files: [{ url: name, size: candidate.size, sha512: candidate.sha512 }] });

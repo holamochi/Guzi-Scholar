@@ -5,8 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { REPOSITORY, identity } = require('../scripts/release-pipeline.cjs');
-const { validateReleaseManifest } = require('../electron/update-service.cjs');
+const { assetURL, compareVersions, validateReleaseManifest } = require('../electron/update-service.cjs');
 
+const LEGACY_REPOSITORY = 'Drangon-Li/Guzi-Scholar';
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const sha512 = (bytes) => crypto.createHash('sha512').update(bytes).digest('base64');
 const assetName = (name) => typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,180}$/u.test(name);
@@ -15,6 +16,7 @@ const canonicalBase64 = (value, size) => typeof value === 'string' && Buffer.fro
 function verifyPublishedMacRelease(directory, { version, publicKey }) {
   const tag = `v${version}`;
   assert.equal(identity(tag, version), 'stable', 'Published source must be a stable release');
+  const historical = compareVersions(version, '0.7.1') <= 0;
   assert(canonicalBase64(publicKey, 32), 'Pinned Sparkle public key required');
   const read = (name) => {
     const filename = path.join(directory, name);
@@ -23,12 +25,12 @@ function verifyPublishedMacRelease(directory, { version, publicKey }) {
     return fs.readFileSync(filename);
   };
   const release = JSON.parse(read('github-release.json'));
-  const api = `https://api.github.com/repos/${REPOSITORY}`;
-  const downloads = `https://github.com/${REPOSITORY}/releases/download/${tag}/`;
   assert(Number.isSafeInteger(release.id) && release.id > 0, 'Published GitHub release ID required');
+  const releaseRepository = historical && release.url === `https://api.github.com/repos/${LEGACY_REPOSITORY}/releases/${release.id}` ? LEGACY_REPOSITORY : REPOSITORY;
+  const api = `https://api.github.com/repos/${releaseRepository}`;
   assert.equal(release.url, `${api}/releases/${release.id}`, 'GitHub release repository mismatch');
   assert.equal(release.assets_url, `${release.url}/assets`, 'GitHub assets repository mismatch');
-  assert.equal(release.html_url, `https://github.com/${REPOSITORY}/releases/tag/${tag}`, 'GitHub release tag URL mismatch');
+  assert.equal(release.html_url, `https://github.com/${releaseRepository}/releases/tag/${tag}`, 'GitHub release tag URL mismatch');
   assert.equal(release.tag_name, tag, 'Published version mismatch');
   assert.equal(release.draft, false, 'An original published release is required');
   assert.equal(release.prerelease, false, 'Stable published release required');
@@ -40,7 +42,7 @@ function verifyPublishedMacRelease(directory, { version, publicKey }) {
     assert(assetName(asset.name) && !assets.has(asset.name), 'Invalid or duplicate GitHub asset name');
     assert(Number.isSafeInteger(asset.id) && asset.id > 0 && !ids.has(asset.id), 'Invalid or duplicate GitHub asset ID');
     assert.equal(asset.url, `${api}/releases/assets/${asset.id}`, `GitHub asset repository mismatch: ${asset.name}`);
-    assert.equal(asset.browser_download_url, `${downloads}${encodeURIComponent(asset.name)}`, `GitHub asset download URL mismatch: ${asset.name}`);
+    assert.equal(asset.browser_download_url, assetURL(tag, asset.name, releaseRepository), `GitHub asset download URL mismatch: ${asset.name}`);
     assert.equal(asset.state, 'uploaded', `Unfinished GitHub asset: ${asset.name}`);
     assert(Number.isSafeInteger(asset.size) && asset.size > 0, `Invalid GitHub asset size: ${asset.name}`);
     assert(asset.digest == null || /^sha256:[a-f0-9]{64}$/u.test(asset.digest), `Invalid GitHub asset digest: ${asset.name}`);
@@ -72,10 +74,12 @@ function verifyPublishedMacRelease(directory, { version, publicKey }) {
     return bytes;
   };
   const provenance = JSON.parse(readChecked('release-provenance.json'));
+  const repository = historical && provenance.repository === LEGACY_REPOSITORY ? LEGACY_REPOSITORY : REPOSITORY;
   assert.equal(provenance.schema, 1, 'Published provenance schema mismatch');
-  for (const [key, value] of Object.entries({ repository: REPOSITORY, tag, version, channel: 'stable' })) assert.equal(provenance[key], value, `Published provenance ${key} mismatch`);
+  for (const [key, value] of Object.entries({ repository, tag, version, channel: 'stable' })) assert.equal(provenance[key], value, `Published provenance ${key} mismatch`);
+  if (releaseRepository === LEGACY_REPOSITORY) assert.equal(repository, LEGACY_REPOSITORY, 'Published provenance repository mismatch');
   assert.match(provenance.commit, /^[a-f0-9]{40}$/u, 'Published provenance commit required');
-  assert.equal(provenance.source, `https://github.com/${REPOSITORY}/commit/${provenance.commit}`, 'Published provenance source mismatch');
+  assert.equal(provenance.source, `https://github.com/${repository}/commit/${provenance.commit}`, 'Published provenance source mismatch');
   assert.equal(release.target_commitish, provenance.commit, 'Published release commit differs from provenance');
   assert.equal(provenance.sparkle_public_key, publicKey, 'Published signing key differs from pinned application key');
   assert(Array.isArray(provenance.assets), 'Published provenance assets required');
@@ -94,7 +98,12 @@ function verifyPublishedMacRelease(directory, { version, publicKey }) {
   assert.equal(manifestRecord.sha512, sha512(manifestBytes), 'Manifest provenance SHA512 mismatch');
   const manifest = JSON.parse(manifestBytes);
   assert.equal(manifest.version, version, 'Manifest version mismatch');
-  const candidate = validateReleaseManifest(manifest, { platform: 'darwin', arch: 'arm64', channel: 'stable', release });
+  // GitHub updates the descriptor URLs after a repository transfer. Checked payloads retain their original URLs.
+  const manifestRelease = releaseRepository === repository ? release : {
+    ...release,
+    assets: release.assets.map((asset) => ({ ...asset, browser_download_url: assetURL(tag, asset.name, repository) })),
+  };
+  const candidate = validateReleaseManifest(manifest, { platform: 'darwin', arch: 'arm64', channel: 'stable', release: manifestRelease, repository });
   const archiveName = `Guzi-Scholar-${version}-arm64-stable.zip`;
   assert.equal(candidate.assetName, archiveName, 'Published archive identity mismatch');
   const record = records.get(archiveName);

@@ -177,7 +177,7 @@ assert.match(pdfSources, /12786d12b2962a1d77fd13b103162eddf749644c/u);
 assert.match(pdfSources, /5e0be7908a715aa20333caddd73f1d6f01e4cd0c26e869fa2dd0b7f344da2249/u);
 assert.match(pdfSources, /44075a84e329db55b9bef5f342a70fd26d69e48ad1d33cb89d9664581c641156/u);
 for (const asset of ['pymupdf-1.28.2.tar.gz', 'mupdf-1.28.2-source.tar.gz']) {
-  assert.ok(pdfSources.includes(`https://github.com/Drangon-Li/Guzi-Scholar/releases/download/v${manifest.version}/${asset}`), `PDF source archive must accompany this exact release: ${asset}`);
+  assert.ok(pdfSources.includes(`https://github.com/holamochi/Guzi-Scholar/releases/download/v${manifest.version}/${asset}`), `PDF source archive must accompany this exact release: ${asset}`);
 }
 assert.ok(pdfSources.includes(`/blob/v${manifest.version}/apps/desktop/scripts/prepare-mac-release.sh`));
 const pdfThirdParty = fs.readFileSync(path.join(pdfRuntimeLicenses, 'THIRD-PARTY-NOTICES.txt'), 'utf8');
