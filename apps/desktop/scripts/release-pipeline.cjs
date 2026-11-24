@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const REPOSITORY = 'Drangon-Li/Guzi-Scholar';
+const { REPOSITORY, assetURL } = require('../electron/update-service.cjs');
 const TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?$/u;
 const sha256 = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const sha512 = (bytes) => crypto.createHash('sha512').update(bytes).digest('base64');
@@ -191,7 +191,13 @@ async function verifiedCandidate(api, context, publicKey = process.env.SPARKLE_P
   assert(matches.length === 1 && matches[0].draft === true, 'Exactly one unpublished draft required; published releases cannot be overwritten');
   const release = matches[0];
   assert(release.prerelease === (context.channel === 'beta'), 'Release channel mismatch');
-  const { downloads } = await verifiedAssets(api, release);
+  const { assets, downloads } = await verifiedAssets(api, release);
+  const releasePrefix = `https://github.com/${REPOSITORY}/releases/tag/`;
+  const draftRef = release.html_url?.startsWith(releasePrefix) ? release.html_url.slice(releasePrefix.length) : '';
+  assert(draftRef === context.tag || /^untagged-[a-f0-9]+$/u.test(draftRef), 'GitHub draft URL mismatch');
+  for (const asset of assets) {
+    assert(asset.browser_download_url === assetURL(draftRef, asset.name), `GitHub asset URL mismatch: ${asset.name}`);
+  }
   assert(downloads.has('release-provenance.json') && downloads.has('update-manifest.json'), 'Candidate provenance and manifest required');
   const provenance = JSON.parse(downloads.get('release-provenance.json'));
   for (const key of ['repository', 'tag', 'commit', 'version', 'channel']) assert(provenance[key] === context[key], `Remote provenance ${key} mismatch`);
@@ -250,7 +256,7 @@ async function review(api, context, reports, publicKey = process.env.SPARKLE_PUB
 
 function releaseNotes(context, manifest) {
   const withWindows = manifest.artifacts.some((artifact) => artifact.platform === 'win32');
-  return `谷子学术 ${context.tag}\n\n支持 macOS Apple Silicon（arm64）${withWindows ? ' 与 Windows x64' : ''}。应用内更新会先保存阅读状态与文献库数据，取消保存时不会安装更新。\n\n尚未内置更新器的旧版用户，请先手动安装一次本版本，之后可使用应用内更新。安装包、更新附件与 SHA256SUMS 校验文件见本页附件。\n\nmacOS 使用 ad-hoc 代码签名及 Sparkle Ed25519 更新签名，未使用 Apple Developer ID 签名或公证，首次打开可能出现系统安全提示。${withWindows ? 'Windows 安装包未使用发布者证书签名。' : ''}\n\n本次原始候选已通过 macOS${withWindows ? ' 与 Windows' : ''} 的升级验收，包含保存取消、普通退出、重启和数据保留检查。`;
+  return `谷子学术 ${context.tag}\n\n支持 macOS Apple Silicon（arm64）${withWindows ? ' 与 Windows x64' : ''}。应用内更新会先保存阅读状态与文献库数据，取消保存时不会安装更新。\n\nmacOS v0.7.1 或更早版本使用迁移前的下载地址，需要手动升级一次。请退出谷子学术，下载本页 DMG，将新版拖入「应用程序」并选择替换。新版可继续使用应用内更新。本页也提供更新附件与 SHA256SUMS 校验文件。\n\nmacOS 使用 ad-hoc 代码签名及 Sparkle Ed25519 更新签名，未使用 Apple Developer ID 签名或公证，首次打开可能出现系统安全提示。${withWindows ? 'Windows 安装包未使用发布者证书签名。' : ''}\n\n本次原始候选已通过 macOS${withWindows ? ' 与 Windows' : ''} 的升级验收，包含保存取消、普通退出、重启和数据保留检查。`;
 }
 
 async function promote(api, context, reports, acceptanceRunID, publicKey = process.env.SPARKLE_PUBLIC_KEY) {

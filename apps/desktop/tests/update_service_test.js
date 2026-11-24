@@ -24,7 +24,11 @@ async function main() {
   for (const patch of [{ draft: true }, { prerelease: true }, { assets: release.assets.slice(0, 1) }]) assert.throws(() => validateReleaseManifest(manifest, { ...options, release: { ...release, ...patch } }));
   const calls = [];
   const result = await findReleaseUpdate({ ...options, currentVersion: '0.6.2', fetcher: async (url) => { calls.push(url); return url.includes('/releases/latest') ? release : manifest; } });
-  assert.equal(result.status, 'available'); assert.equal(calls.length, 2);
+  assert.equal(result.status, 'available');
+  assert.deepEqual(calls, [
+    'https://api.github.com/repos/holamochi/Guzi-Scholar/releases/latest',
+    `https://github.com/holamochi/Guzi-Scholar/releases/download/${tag}/update-manifest.json`,
+  ]);
   const announcementCalls = [];
   const announcement = await findReleaseAnnouncement({ ...options, currentVersion: '0.6.2', fetcher: async (url) => {
     announcementCalls.push(url);

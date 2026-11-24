@@ -26,10 +26,10 @@ dialog.showMessageBoxSync = (...args) => { throw new Error(`Unexpected synchrono
 const manifest = () => JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const candidate = () => {
   const source = manifest();
-  return { version: source.version, channel: 'stable', platform: 'darwin', arch: process.arch, assetName: `Guzi-Scholar-${source.version}-${process.arch}-stable.zip`, downloadURL: source.downloadURL, size: source.length, sha256: source.sha256, sha512: source.sha512, edSignature: source.signature, minimumSystemVersion: '12.0', publishedAt: '2026-10-01T00:00:00Z', notes: 'Isolated production updater acceptance', repository: 'Drangon-Li/Guzi-Scholar' };
+  return { version: source.version, channel: 'stable', platform: 'darwin', arch: process.arch, assetName: `Guzi-Scholar-${source.version}-${process.arch}-stable.zip`, downloadURL: source.downloadURL, size: source.length, sha256: source.sha256, sha512: source.sha512, edSignature: source.signature, minimumSystemVersion: '12.0', publishedAt: '2026-10-01T00:00:00Z', notes: 'Isolated production updater acceptance', repository: 'holamochi/Guzi-Scholar' };
 };
 // Test-only dependency injection leaves the production main/controller/IPC/save gate intact.
-require('./update-config.cjs').resolveUpdateConfig = () => ({ enabled: true, channel: 'stable', publicKey: probe.publicKey, repository: 'Drangon-Li/Guzi-Scholar' });
+require('./update-config.cjs').resolveUpdateConfig = () => ({ enabled: true, channel: 'stable', publicKey: probe.publicKey, repository: 'holamochi/Guzi-Scholar' });
 require('./update-service.cjs').findReleaseUpdate = async ({ currentVersion }) => ({ ...candidate(), status: 'available', currentVersion, checkedAt: new Date().toISOString() });
 const mac = require('./mac-updater.cjs');
 const createMacUpdater = mac.createMacUpdater;

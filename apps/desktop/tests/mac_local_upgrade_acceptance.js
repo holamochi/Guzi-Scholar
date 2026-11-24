@@ -217,7 +217,7 @@ async function execute(options) {
       assert.equal(metadata.updater.publicKey, options.publicKey);
       assert.equal(metadata.updater.enabled, true);
       assert.equal(metadata.updater.channel, 'stable');
-      assert.equal(metadata.updater.repository, 'Drangon-Li/Guzi-Scholar');
+      assert.equal(metadata.updater.repository, release.manifest.repository, 'Published bundle repository must match verified release');
       assert.equal(plist(original, 'CFBundleIdentifier'), 'com.guzi.scholar');
       for (const property of ['CFBundleVersion', 'CFBundleShortVersionString']) assert.equal(plist(original, property), release.version);
       assert.equal(plist(original, 'SUPublicEDKey'), options.publicKey);
@@ -248,9 +248,11 @@ async function execute(options) {
     assert(crypto.verify(null, bytes, key.publicKey, Buffer.from(signature, 'base64')));
     const targetArtifact = target.manifest.artifacts.find((item) => item.platform === 'darwin' && item.arch === 'arm64');
     assert(targetArtifact, 'Verified target macOS artifact required');
-    const artifact = { ...targetArtifact, name: path.basename(archive), url: assetURL(`v${options.targetVersion}`, path.basename(archive)), size: bytes.length, sha256: digest(bytes), sha512: digest(bytes, 'sha512', 'base64'), ed_signature: signature };
-    const manifest = { ...target.manifest, version: options.targetVersion, artifacts: [artifact], notes: `LOCAL ISOLATED UPGRADE TEST ONLY: code from ${target.tag}` };
-    validateReleaseManifest(manifest, { platform: 'darwin', arch: 'arm64', channel: 'stable', release: { tag_name: `v${options.targetVersion}`, draft: false, prerelease: false, assets: [{ name: artifact.name, size: artifact.size, state: 'uploaded', browser_download_url: artifact.url }] } });
+    // The synthetic update is parsed by the updater bundled in the source app.
+    const repository = source.manifest.repository;
+    const artifact = { ...targetArtifact, name: path.basename(archive), url: assetURL(`v${options.targetVersion}`, path.basename(archive), repository), size: bytes.length, sha256: digest(bytes), sha512: digest(bytes, 'sha512', 'base64'), ed_signature: signature };
+    const manifest = { ...target.manifest, repository, version: options.targetVersion, artifacts: [artifact], notes: `LOCAL ISOLATED UPGRADE TEST ONLY: code from ${target.tag}` };
+    validateReleaseManifest(manifest, { platform: 'darwin', arch: 'arm64', channel: 'stable', repository, release: { tag_name: `v${options.targetVersion}`, draft: false, prerelease: false, assets: [{ name: artifact.name, size: artifact.size, state: 'uploaded', browser_download_url: artifact.url }] } });
     writeJSON(path.join(root, 'update-manifest.json'), manifest);
     server = http.createServer((request, response) => {
       if (request.url !== '/candidate.zip') { response.writeHead(404).end(); return; }

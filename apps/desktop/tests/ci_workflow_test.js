@@ -130,7 +130,7 @@ async function checkAcceptanceModes() {
   const step = acceptance.jobs.validate.steps.find((item) => item.run?.includes("node <<'NODE'"));
   const script = step.run.split("node <<'NODE'\n")[1].split('\nNODE')[0];
   const context = { tag: 'v0.6.9', version: '0.6.9', channel: 'stable', commit: 'a'.repeat(40) };
-  const repository = 'Drangon-Li/Guzi-Scholar';
+  const repository = 'holamochi/Guzi-Scholar';
   for (const windowsCandidate of [false, true]) {
     for (const mac of ['', '{}']) for (const win of ['', '{}']) {
       let output = '';

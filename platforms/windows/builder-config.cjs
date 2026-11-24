@@ -2,6 +2,7 @@
 
 const base = require('./electron-builder.win.json');
 const path = require('node:path');
+const { REPOSITORY } = require('../../apps/desktop/electron/update-service.cjs');
 
 const identities = {
   stable: { appId: 'com.guzi.scholar', guid: 'acfa1927-3d90-5574-b27a-fde562713e6a', productName: '谷子学术' },
@@ -28,9 +29,9 @@ function createWindowsBuildConfig(environment = process.env) {
   config.win.verifyUpdateCodeSignature = signed;
   if (signed) config.win.signtoolOptions = { publisherName: publisher, signingHashAlgorithms: ['sha256'] };
   config.extraMetadata.updater = { enabled: Boolean(channel), channel: channel || 'stable',
-    repository: 'Drangon-Li/Guzi-Scholar', minimumSystemVersion: '10.0.18362', signing: signed ? 'authenticode' : 'unsigned-internal' };
+    repository: REPOSITORY, minimumSystemVersion: '10.0.18362', signing: signed ? 'authenticode' : 'unsigned-internal' };
   if (channel) {
-    config.publish = [{ provider: 'generic', url: 'https://github.com/Drangon-Li/Guzi-Scholar/releases/download/v${version}/',
+    config.publish = [{ provider: 'generic', url: `https://github.com/${REPOSITORY}/releases/download/v\${version}/`,
       channel: channel === 'stable' ? 'latest' : 'beta', useMultipleRangeRequest: false }];
     config.generateUpdatesFilesForAllChannels = false;
   } else config.publish = null;

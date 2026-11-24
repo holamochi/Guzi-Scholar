@@ -234,7 +234,7 @@ async function main() {
       } else response.writeHead(404).end();
     });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-    const candidate = { repository: 'Drangon-Li/Guzi-Scholar', version: targetVersion, channel: 'stable', platform: 'win32', arch: 'x64', assetName: path.basename(target),
+    const candidate = { repository: 'holamochi/Guzi-Scholar', version: targetVersion, channel: 'stable', platform: 'win32', arch: 'x64', assetName: path.basename(target),
       downloadURL: `http://127.0.0.1:${server.address().port}/${path.basename(target)}`, size: source.length,
       sha256: await digest(target), sha512: await digest(target, 'sha512', 'base64'), minimumSystemVersion: '10.0.18362' };
     writeJSON(path.join(root, 'candidate.json'), candidate);

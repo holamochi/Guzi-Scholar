@@ -7,6 +7,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const LOCAL_TEST_BUILD = '20261022.5';
 const { prepareSparkle } = require('./prepare-sparkle.cjs');
+const { REPOSITORY } = require('../electron/update-service.cjs');
 
 function preventBuildOutputIndexing(outputDirectory) {
   fs.mkdirSync(outputDirectory, { recursive: true });
@@ -35,7 +36,7 @@ function buildOptions(target, mode, environment = process.env) {
   const enabled = ['stable', 'beta'].includes(channel);
   const publicKey = String(environment.SPARKLE_PUBLIC_KEY || '').trim();
   if (enabled && (!publicKey || Buffer.from(publicKey, 'base64').length !== 32 || Buffer.from(publicKey, 'base64').toString('base64') !== publicKey)) throw new Error('Updater-enabled builds require SPARKLE_PUBLIC_KEY (32-byte canonical base64 public key)');
-  const updater = enabled ? { enabled: true, channel, repository: 'Drangon-Li/Guzi-Scholar', publicKey, minimumSystemVersion: '12.0', frameworkVersion: '2.10.1' } : { enabled: false, channel };
+  const updater = enabled ? { enabled: true, channel, repository: REPOSITORY, publicKey, minimumSystemVersion: '12.0', frameworkVersion: '2.10.1' } : { enabled: false, channel };
   const { build } = require('../package.json');
   let configuration;
   if (enabled) {
